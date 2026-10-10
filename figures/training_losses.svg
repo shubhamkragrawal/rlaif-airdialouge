@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE svg
+  PUBLIC '-//W3C//DTD SVG 1.0//EN'
+  'http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd'>
+<svg width="1120" height="610" preserveAspectRatio="xMinYMin meet" viewBox="0 0 1120 610" xmlns="http://www.w3.org/2000/svg" version="1.0" fill-rule="evenodd" xmlns:xlink="http://www.w3.org/1999/xlink">
+	<title>...</title>
+	<desc>...</desc>
+	<clipPath id="clip">
+		<rect x="0" y="0" width="1120" height="610"/>
+	</clipPath>
+	<g id="group" transform="scale(1,-1) translate(0,-610)" style="clip-path: url(#clip)">
+		<g transform="">
+			<rect x="0" y="0" width="1120" height="610" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(100%,100%,100%); fill-rule: evenodd;"/>
+			<text x="48" y="561" style="font-family: Helvetica-Bold; font-size: 24px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,1122) scale(1,-1)">Training objectives</text>
+			<text x="48" y="535" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,1070) scale(1,-1)">Measured logs from rebuilt SFT and DPO runs</text>
+			<text x="95" y="490" style="font-family: Helvetica-Bold; font-size: 17px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,980) scale(1,-1)">SFT token loss</text>
+			<text x="640" y="490" style="font-family: Helvetica-Bold; font-size: 17px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,980) scale(1,-1)">DPO preference loss</text>
+			<path d="M 95,132 L 520,132 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="79.44" y="128.0" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,256) scale(1,-1)">0</text>
+			<path d="M 95,208.190476 L 520,208.190476 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="79.44" y="204.1904761904762" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,408) scale(1,-1)">1</text>
+			<path d="M 95,284.380952 L 520,284.380952 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="79.44" y="280.3809523809524" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,560) scale(1,-1)">2</text>
+			<path d="M 95,360.571429 L 520,360.571429 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="79.44" y="356.57142857142856" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,713) scale(1,-1)">3</text>
+			<path d="M 95,436.761905 L 520,436.761905 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="79.44" y="432.76190476190476" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,865) scale(1,-1)">4</text>
+			<path d="M 95,132 L 520,132 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 1;"/>
+			<path d="M 95,132 L 95,452 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 1;"/>
+			<path d="M 95,132 L 95,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="92.22" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">0</text>
+			<path d="M 180,132 L 180,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="171.66" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">125</text>
+			<path d="M 265,132 L 265,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="256.66" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">250</text>
+			<path d="M 350,132 L 350,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="341.66" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">375</text>
+			<path d="M 435,132 L 435,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="426.66" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">500</text>
+			<path d="M 520,132 L 520,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="511.66" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">625</text>
+			<text x="268.824" y="84" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,168) scale(1,-1)">Optimizer step</text>
+			<polyline points="101.8 432.9448, 108.6 296.3124, 115.4 229.92, 122.2 215.3371, 129 208.8381, 135.8 200.7314, 142.6 201.9657, 149.4 201.3257, 156.2 203.1771, 163 194.2933, 169.8 196.5562, 176.6 199.8629, 183.4 187.9924, 190.2 196.9371, 197 192.3962, 203.8 193.2267, 210.6 197.1581, 217.4 188.32, 224.2 194.4381, 231 195.619, 237.8 190.5295, 244.6 193.3029, 251.4 194.4838, 258.2 196.5257, 265 198.3162, 271.8 195.3752, 278.6 190.2629, 285.4 190.1257, 292.2 189.699, 299 187.8705, 305.8 186.8648, 312.6 185.2267, 319.4 192.2286, 326.2 187.2457, 333 187.7105, 339.8 193.6762, 346.6 191.3219, 353.4 189.0514, 360.2 189.1505, 367 188.0533, 373.8 187.84, 380.6 193.44, 387.4 188.6781, 394.2 187.9314, 401 190.9181, 407.8 187.7714, 414.6 190.941, 421.4 186.9181, 428.2 184.16, 435 185.9657, 441.8 185.4019, 448.6 182.1486, 455.4 191.7105, 462.2 183.9162, 469 192.3581, 475.8 190.0267, 482.6 185.6076, 489.4 184.9752, 496.2 189.3257, 503 189.2038, 509.8 182.2171, 516.6 189.6152" style="stroke: rgb(13%,39%,66%); stroke-linecap: butt; stroke-width: 2.7; fill: None; fill-rule: evenodd;"/>
+			<path d="M 640,132 L 1065,132 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="610.54" y="128.0" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,256) scale(1,-1)">0.50</text>
+			<path d="M 640,204.727273 L 1065,204.727273 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="610.54" y="200.7272727272728" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,401) scale(1,-1)">0.55</text>
+			<path d="M 640,277.454545 L 1065,277.454545 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="610.54" y="273.45454545454544" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,546) scale(1,-1)">0.60</text>
+			<path d="M 640,350.181818 L 1065,350.181818 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="610.54" y="346.18181818181824" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,692) scale(1,-1)">0.65</text>
+			<path d="M 640,422.909091 L 1065,422.909091 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="610.54" y="418.9090909090909" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,837) scale(1,-1)">0.70</text>
+			<path d="M 640,132 L 1065,132 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 1;"/>
+			<path d="M 640,132 L 640,452 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 1;"/>
+			<path d="M 640,132 L 640,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="637.22" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">0</text>
+			<path d="M 710.833333,132 L 710.833333,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="705.2733333333334" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">12</text>
+			<path d="M 781.666667,132 L 781.666667,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="776.1066666666667" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">24</text>
+			<path d="M 852.5,132 L 852.5,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="846.94" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">36</text>
+			<path d="M 923.333333,132 L 923.333333,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="917.7733333333333" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">48</text>
+			<path d="M 994.166667,132 L 994.166667,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="988.6066666666668" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">60</text>
+			<path d="M 1065,132 L 1065,127 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="1059.44" y="111" style="font-family: Helvetica; font-size: 10px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,222) scale(1,-1)">72</text>
+			<text x="813.824" y="84" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,168) scale(1,-1)">Optimizer step</text>
+			<polyline points="645.9028 412.8727, 651.8056 412.8727, 657.7083 415.2, 663.6111 410.4, 669.5139 403.1273, 675.4167 409.5273, 681.3194 404.5818, 687.2222 402.1091, 693.125 390.1818, 699.0278 384.9455, 704.9306 382.0364, 710.8333 399.4909, 716.7361 368.0727, 722.6389 392.9455, 728.5417 358.0364, 734.4444 386.1091, 740.3472 374.1818, 746.25 361.2364, 752.1528 362.6909, 758.0556 373.1636, 763.9583 341.0182, 769.8611 353.0909, 775.7639 365.1636, 781.6667 302.6182, 787.5694 306.6909, 793.4722 322.5455, 799.375 310.0364, 805.2778 323.4182, 811.1806 340.8727, 817.0833 262.0364, 822.9861 313.3818, 828.8889 318.4727, 834.7917 298.8364, 840.6944 330.5455, 846.5972 350.4727, 852.5 260.5818, 858.4028 269.8909, 864.3056 270.1818, 870.2083 373.3091, 876.1111 272.3636, 882.0139 280.8, 887.9167 295.2, 893.8194 341.6, 899.7222 263.6364, 905.625 250.1091, 911.5278 319.6364, 917.4306 273.2364, 923.3333 257.3818, 929.2361 300.7273, 935.1389 300, 941.0417 258.8364, 946.9444 276.1455, 952.8472 311.0545, 958.75 282.1091, 964.6528 291.1273, 970.5556 287.3455, 976.4583 283.1273, 982.3611 273.2364, 988.2639 260.7273, 994.1667 221.8909, 1000.069 207.9273, 1005.972 172, 1011.875 247.6364, 1017.778 271.9273, 1023.681 300.7273, 1029.583 229.1636, 1035.486 286.1818, 1041.389 231.3455, 1047.292 284, 1053.194 319.6364, 1059.097 279.3455, 1065 265.5273" style="stroke: rgb(0%,54%,51%); stroke-linecap: butt; stroke-width: 2.7; fill: None; fill-rule: evenodd;"/>
+			<text x="95" y="54" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,108) scale(1,-1)">Run-average SFT loss: 0.865 (625 steps)</text>
+			<text x="640" y="54" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,108) scale(1,-1)">Run-average DPO loss: 0.627 (72 steps)</text>
+			<text x="95" y="30" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,60) scale(1,-1)">Objectives and scales differ; do not compare their loss values directly.</text>
+		</g>
+	</g>
+</svg>

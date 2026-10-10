@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE svg
+  PUBLIC '-//W3C//DTD SVG 1.0//EN'
+  'http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd'>
+<svg width="1100" height="590" preserveAspectRatio="xMinYMin meet" viewBox="0 0 1100 590" xmlns="http://www.w3.org/2000/svg" version="1.0" fill-rule="evenodd" xmlns:xlink="http://www.w3.org/1999/xlink">
+	<title>...</title>
+	<desc>...</desc>
+	<clipPath id="clip">
+		<rect x="0" y="0" width="1100" height="590"/>
+	</clipPath>
+	<g id="group" transform="scale(1,-1) translate(0,-590)" style="clip-path: url(#clip)">
+		<g transform="">
+			<rect x="0" y="0" width="1100" height="590" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(100%,100%,100%); fill-rule: evenodd;"/>
+			<text x="48" y="541" style="font-family: Helvetica-Bold; font-size: 24px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,1082) scale(1,-1)">Held-out task success</text>
+			<text x="48" y="515" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,1030) scale(1,-1)">Same 50 evaluation scenarios per arm  |  bars show observed rate  |  whiskers show Wilson 95% intervals</text>
+			<path d="M 105,155 L 1020,155 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="77.105" y="151.0" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,302) scale(1,-1)">0%</text>
+			<path d="M 105,204.230769 L 1020,204.230769 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="70.989" y="200.23076923076923" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,400) scale(1,-1)">10%</text>
+			<path d="M 105,253.461538 L 1020,253.461538 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="70.989" y="249.46153846153845" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,498) scale(1,-1)">20%</text>
+			<path d="M 105,302.692308 L 1020,302.692308 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="70.989" y="298.6923076923077" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,597) scale(1,-1)">30%</text>
+			<path d="M 105,351.923077 L 1020,351.923077 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="70.989" y="347.9230769230769" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,695) scale(1,-1)">40%</text>
+			<path d="M 105,401.153846 L 1020,401.153846 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="70.989" y="397.15384615384613" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,794) scale(1,-1)">50%</text>
+			<path d="M 105,450.384615 L 1020,450.384615 Z" style="stroke: rgb(85%,88%,92%); stroke-linecap: butt; stroke-width: 0.8;"/>
+			<text x="70.989" y="446.38461538461536" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,892) scale(1,-1)">60%</text>
+			<path d="M 105,155 L 1020,155 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 1;"/>
+			<rect x="149" y="155" width="102" height="78.76923076923077" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(35%,41%,50%); fill-rule: evenodd;"/>
+			<path d="M 200,196.045763 L 200,295.377679 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 189,196.045763 L 211,196.045763 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 189,295.377679 L 211,295.377679 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<text x="185.993" y="308.37767907955686" style="font-family: Helvetica-Bold; font-size: 14px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,616) scale(1,-1)">16%</text>
+			<text x="184.465" y="127" style="font-family: Helvetica-Bold; font-size: 13px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,254) scale(1,-1)">Base</text>
+			<text x="189.297" y="106" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,212) scale(1,-1)">8/50</text>
+			<rect x="331" y="155" width="102" height="128.0" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(13%,39%,66%); fill-rule: evenodd;"/>
+			<path d="M 382,233.136751 L 382,349.723236 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 371,233.136751 L 393,233.136751 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 371,349.723236 L 393,349.723236 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<text x="367.993" y="362.72323576540964" style="font-family: Helvetica-Bold; font-size: 14px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,725) scale(1,-1)">26%</text>
+			<text x="369.7215" y="127" style="font-family: Helvetica-Bold; font-size: 13px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,254) scale(1,-1)">SFT</text>
+			<text x="368.239" y="106" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,212) scale(1,-1)">13/50</text>
+			<rect x="513" y="155" width="102" height="167.38461538461536" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(0%,54%,51%); fill-rule: evenodd;"/>
+			<path d="M 564,265.458827 L 564,390.550395 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 553,265.458827 L 575,265.458827 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 553,390.550395 L 575,390.550395 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<text x="549.993" y="403.5503948296241" style="font-family: Helvetica-Bold; font-size: 14px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,807) scale(1,-1)">34%</text>
+			<text x="549.9145" y="127" style="font-family: Helvetica-Bold; font-size: 13px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,254) scale(1,-1)">DPO</text>
+			<text x="550.239" y="106" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,212) scale(1,-1)">17/50</text>
+			<rect x="695" y="155" width="102" height="187.0769230769231" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(47%,34%,66%); fill-rule: evenodd;"/>
+			<path d="M 746,282.324501 L 746,410.259338 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 735,282.324501 L 757,282.324501 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 735,410.259338 L 757,410.259338 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<text x="731.993" y="423.2593381858807" style="font-family: Helvetica-Bold; font-size: 14px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,846) scale(1,-1)">38%</text>
+			<text x="723.237" y="127" style="font-family: Helvetica-Bold; font-size: 13px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,254) scale(1,-1)">PPO 19</text>
+			<text x="732.239" y="106" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,212) scale(1,-1)">19/50</text>
+			<rect x="877" y="155" width="102" height="167.38461538461536" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(83%,48%,9%); fill-rule: evenodd;"/>
+			<path d="M 928,265.458827 L 928,390.550395 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 917,265.458827 L 939,265.458827 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<path d="M 917,390.550395 L 939,390.550395 Z" style="stroke: rgb(9%,14%,21%); stroke-linecap: butt; stroke-width: 2;"/>
+			<text x="913.993" y="403.5503948296241" style="font-family: Helvetica-Bold; font-size: 14px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,807) scale(1,-1)">34%</text>
+			<text x="905.237" y="127" style="font-family: Helvetica-Bold; font-size: 13px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,254) scale(1,-1)">PPO 50</text>
+			<text x="914.239" y="106" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,212) scale(1,-1)">17/50</text>
+			<text x="105" y="55" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,110) scale(1,-1)">PPO 19 = gate-early-stopped checkpoint; PPO 50 = adaptive continuation. Intervals overlap; differences are directional.</text>
+			<text x="105" y="34" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,68) scale(1,-1)">Source: final non-provisional evaluation summaries; all arms use protocol v3.</text>
+		</g>
+	</g>
+</svg>

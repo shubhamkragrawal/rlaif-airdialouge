@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE svg
+  PUBLIC '-//W3C//DTD SVG 1.0//EN'
+  'http://www.w3.org/TR/2001/REC-SVG-20010904/DTD/svg10.dtd'>
+<svg width="1100" height="490" preserveAspectRatio="xMinYMin meet" viewBox="0 0 1100 490" xmlns="http://www.w3.org/2000/svg" version="1.0" fill-rule="evenodd" xmlns:xlink="http://www.w3.org/1999/xlink">
+	<title>...</title>
+	<desc>...</desc>
+	<clipPath id="clip">
+		<rect x="0" y="0" width="1100" height="490"/>
+	</clipPath>
+	<g id="group" transform="scale(1,-1) translate(0,-490)" style="clip-path: url(#clip)">
+		<g transform="">
+			<rect x="0" y="0" width="1100" height="490" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(100%,100%,100%); fill-rule: evenodd;"/>
+			<text x="48" y="441" style="font-family: Helvetica-Bold; font-size: 24px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,882) scale(1,-1)">Preference generation quality</text>
+			<text x="48" y="415" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,830) scale(1,-1)">Full validated run: 700 decision scenarios judged with the grounded rubric</text>
+			<rect x="80" y="285" width="518.3428571428572" height="76" style="stroke: rgb(100%,100%,100%); stroke-linecap: butt; stroke-width: 1; fill: rgb(0%,54%,51%); fill-rule: evenodd;"/>
+			<text x="322.49142857142857" y="315" style="font-family: Helvetica-Bold; font-size: 20px;fill: rgb(100%,100%,100%); stroke:none;" transform="translate(0,630) scale(1,-1)">386</text>
+			<rect x="598.3428571428572" y="285" width="393.4571428571428" height="76" style="stroke: rgb(100%,100%,100%); stroke-linecap: butt; stroke-width: 1; fill: rgb(83%,48%,9%); fill-rule: evenodd;"/>
+			<text x="778.3914285714286" y="315" style="font-family: Helvetica-Bold; font-size: 20px;fill: rgb(100%,100%,100%); stroke:none;" transform="translate(0,630) scale(1,-1)">293</text>
+			<rect x="991.8" y="285" width="16.114285714285757" height="76" style="stroke: rgb(100%,100%,100%); stroke-linecap: butt; stroke-width: 1; fill: rgb(35%,41%,50%); fill-rule: evenodd;"/>
+			<rect x="1007.9142857142857" y="285" width="10.742857142857133" height="76" style="stroke: rgb(100%,100%,100%); stroke-linecap: butt; stroke-width: 1; fill: rgb(47%,34%,66%); fill-rule: evenodd;"/>
+			<rect x="1018.6571428571428" y="285" width="1.3428571428571558" height="76" style="stroke: rgb(100%,100%,100%); stroke-linecap: butt; stroke-width: 1; fill: rgb(73%,27%,31%); fill-rule: evenodd;"/>
+			<rect x="80" y="215" width="17" height="17" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(0%,54%,51%); fill-rule: evenodd;"/>
+			<text x="107" y="218" style="font-family: Helvetica; font-size: 12px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,436) scale(1,-1)">Retained pairs: 386</text>
+			<rect x="425" y="215" width="17" height="17" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(83%,48%,9%); fill-rule: evenodd;"/>
+			<text x="452" y="218" style="font-family: Helvetica; font-size: 12px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,436) scale(1,-1)">Score gap below threshold: 293</text>
+			<rect x="770" y="215" width="17" height="17" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(35%,41%,50%); fill-rule: evenodd;"/>
+			<text x="797" y="218" style="font-family: Helvetica; font-size: 12px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,436) scale(1,-1)">Ineligible: 12</text>
+			<rect x="80" y="157" width="17" height="17" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(47%,34%,66%); fill-rule: evenodd;"/>
+			<text x="107" y="160" style="font-family: Helvetica; font-size: 12px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,320) scale(1,-1)">Parse failure: 8</text>
+			<rect x="425" y="157" width="17" height="17" style="stroke: none; stroke-linecap: butt; stroke-width: 1; fill: rgb(73%,27%,31%); fill-rule: evenodd;"/>
+			<text x="452" y="160" style="font-family: Helvetica; font-size: 12px;fill: rgb(9%,14%,21%); stroke:none;" transform="translate(0,320) scale(1,-1)">Judge failure: 1</text>
+			<text x="80" y="92" style="font-family: Helvetica-Bold; font-size: 17px;fill: rgb(0%,54%,51%); stroke:none;" transform="translate(0,184) scale(1,-1)">Retained: 386/700 (55.1%)</text>
+			<text x="80" y="65" style="font-family: Helvetica; font-size: 12px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,130) scale(1,-1)">Quality gates passed; corrected top-choice stability: 5/5.</text>
+			<text x="80" y="40" style="font-family: Helvetica; font-size: 11px;fill: rgb(35%,41%,50%); stroke:none;" transform="translate(0,80) scale(1,-1)">Outcome counts partition 700 scenarios. Parse-failure rate reported elsewhere uses judged responses as denominator.</text>
+		</g>
+	</g>
+</svg>
