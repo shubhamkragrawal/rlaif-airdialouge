@@ -108,6 +108,12 @@ python -m venv .venv
 .venv/bin/python -m local_app.cli --adapter dpo --model
 ```
 
+The browser regressions BR006 and BR007 also require Node.js 18 or newer on
+`PATH`. Set `RLAIF_NODE` to the Node executable if it is not on `PATH`. They
+execute the shipped browser script with Node's built-in `node:vm` and a
+behavioral DOM harness; no npm package is required. These tests fail with a
+prerequisite error if Node.js is unavailable.
+
 The API exposes `GET /health`, `GET /adapters`, `POST /sessions`,
 `GET /sessions/{id}`, `POST /sessions/{id}/messages`, and
 `POST /sessions/{id}/reset`. `GET /` serves a small browser UI. It binds to

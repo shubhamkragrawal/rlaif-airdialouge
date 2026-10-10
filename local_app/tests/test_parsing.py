@@ -53,6 +53,16 @@ class PassengerNameParsingTests(unittest.TestCase):
         outcomes = passenger_name_candidates("Passengers JFK and LAX are traveling")
         self.assertFalse(any(candidate.found for candidate in outcomes))
 
+    def test_passenger_name_stops_before_all_following_flight_criteria(self):
+        for message in (
+            "Book flight 1027 for Amy Gonzalez from IAD to LAS departing 1/1 returning 1/3 under $500",
+            "Find from IAD to LAS for Amy Gonzalez departing in the morning and returning in the evening",
+        ):
+            with self.subTest(message=message):
+                result = parse_passenger_name(message)
+                self.assertEqual(result.status, "found")
+                self.assertEqual(result.name, "Amy Gonzalez")
+
     def test_unicode_normalization_and_whitespace(self):
         self.assertEqual(normalize_name_text("  Ａｎｎｅ Marie—Jones. "), "Anne Marie-Jones")
 

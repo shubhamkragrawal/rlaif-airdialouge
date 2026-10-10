@@ -1,0 +1,15 @@
+{
+  "artifact_version": 1,
+  "source": "test_artifact_report.md (Live UI Test Artifact Report, October 10, 2026)",
+  "test_module": "local_app/tests/test_browser_regressions.py",
+  "execution_prerequisite": "Node.js 18+ with built-in node:vm; required by BR006 and BR007, with no npm dependency.",
+  "cases": [
+    {"case_id": "BR001", "report_section": "2. Invalid flight selection — safe but misleading", "coverage": "Reject flight 9999 with explicit invalid-option wording; booking remains absent."},
+    {"case_id": "BR002", "report_section": "4. Impossible search — failed presentation check", "coverage": "An impossible IAD–LAS search under $1 yields friendly no-results text and structured raw results []."},
+    {"case_id": "BR003", "report_section": "5. Booking flow — failed grounding and repetition checks", "coverage": "A model confirmation without simulator transaction evidence is rejected."},
+    {"case_id": "BR004", "report_section": "5. Booking flow — failed grounding and repetition checks", "coverage": "Repeated model output is rejected and deterministic concise text is used."},
+    {"case_id": "BR005", "report_section": "1. Grounded search — passed", "coverage": "Positive control: model response is accepted when flight and fare match retrieved local data."},
+    {"case_id": "BR006", "report_section": "3. Prompt-injection and XSS attempt — passed", "coverage": "Executes the shipped page script in a JavaScript engine with a behavioral DOM and submits injection/XSS markup; verifies no payload elements, event attributes, or execution marker appear, invalid selection is rejected, and the input clears on submit and after response."},
+    {"case_id": "BR007", "report_section": "3. Prompt-injection and XSS attempt — passed", "coverage": "Executes the shipped page script and verifies submitted accepted text appears literally in the transcript with no parsed markup, and the input is empty both on submit and after the assistant response."}
+  ]
+}

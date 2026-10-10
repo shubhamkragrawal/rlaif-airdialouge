@@ -415,7 +415,7 @@ class BatchTwoIntegrationTests(unittest.TestCase):
                 self.assertFalse(c.simulator.bookings)
                 self.assertFalse(c.simulator.holds)
                 self.assertIsNone(state.booking)
-                self.assertIsNone(state.passenger)
+                self.assertEqual(state.passenger, "Bob Smith")
                 self.assertTrue(str(result["fallback_reason"]).startswith("passenger_"))
 
     def test_cached_repeat_booking_is_bounded(self):

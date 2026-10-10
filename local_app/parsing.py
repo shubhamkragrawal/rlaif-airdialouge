@@ -25,7 +25,9 @@ _NON_NAMES = {
 }
 _TAIL = re.compile(
     r"\s+(?:for|to|from|on|with|and|but|please|search|find|book|booking|"
-    r"flight|flights|ticket|tickets|tomorrow|today|next|week|month)\b.*$",
+    r"flight|flights|ticket|tickets|tomorrow|today|next|week|month|"
+    r"depart\w*|return\w*|outbound|under|below|maximum|max|less|"
+    r"nonstop|direct|connections?|at\s+most|up\s+to)\b.*$",
     re.IGNORECASE,
 )
 _INTRODUCER = re.compile(r"\b(?:my\s+name\s+is|book\s+for|passenger)\b\s*", re.I)

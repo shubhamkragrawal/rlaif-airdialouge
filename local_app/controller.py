@@ -20,6 +20,8 @@ from .tools import FlightSearchResult, FlightSimulator, SearchCriteria, flight_d
 from .parsing import parse_passenger_name
 from .output_validation import validate_output
 from .limits import ExecutionBudget, ExecutionLimits, LimitReason
+from .request_parsing import ParsedRequest, booking_withdrawn, parse_request
+from .state_transitions import ConfirmedBookingRecord, plan_passenger_change, plan_state_transition
 
 if TYPE_CHECKING:
     from .runtime import ModelAdapter
@@ -143,6 +145,7 @@ class SessionState:
     passenger: str | None = None
     hold_id: str | None = None
     booking: dict[str, Any] | None = None
+    booking_history: tuple[ConfirmedBookingRecord, ...] = ()
     criteria: SearchCriteria = field(default_factory=SearchCriteria)
     turn_count: int = 0
     budget: ClassVar[ExecutionBudget | None] = None
@@ -196,7 +199,8 @@ class ConversationController:
 
     def handle(self, state: SessionState, message: str) -> dict[str, Any]:
         message = validate_input(message)
-        parsed_passenger = _parse_controller_passenger(message)
+        parsed_request = parse_request(message)
+        parsed_passenger = parsed_request.passenger
         if self.audit:
             if parsed_passenger.found:
                 self.audit.register_passenger(parsed_passenger.name)
@@ -211,18 +215,16 @@ class ConversationController:
             return self._limit_response(reasons, state)
         state.turn_count += 1
         state.turns.append({"role": "user", "content": message})
-        if parsed_passenger.found:
-            state.passenger = parsed_passenger.name
-        elif (parsed_passenger.status == "rejected" and
+        if (parsed_passenger.status == "rejected" and
               ((parsed_passenger.matched_phrase or "").casefold() in {"passenger", "book for", "my name is"}
                or parsed_passenger.reason not in {"command_or_airport_code", "airport_code_or_acronym"}
                or (parsed_passenger.matched_phrase == "for"
                    and len((parsed_passenger.candidate or "").split()) >= 2
                    and not re.search(r"\b(?:flight|reservation|booking|please|today|tomorrow)\b",
                                      parsed_passenger.candidate or "", re.I)))):
-            # An explicit but rejected passenger must never inherit a previous
-            # passenger from session state.
-            state.passenger = None
+            # Reject before passenger or transaction state changes. A rejected
+            # name cannot authorize a transaction, but it also cannot erase a
+            # previously confirmed, valid passenger context.
             reason = "passenger_" + (parsed_passenger.reason or "invalid")
             response = "I couldn't use that passenger name. Please provide a valid name up to 100 characters."
             state.turns.append({"role": "assistant", "content": response})
@@ -232,7 +234,7 @@ class ConversationController:
             if self.audit: self.audit.write("assistant_response", result)
             return result
         try:
-            outcome = self._respond(state, message)
+            outcome = self._respond(state, message, parsed_request)
         except _BudgetExceeded as exc:
             reason = exc.reasons[0].value
             outcome = make_turn_outcome(intent=Intent.REFUSE,
@@ -532,17 +534,58 @@ class ConversationController:
         if errors:
             raise ValueError(errors[0].code)
 
-    def _respond(self, state: SessionState, message: str) -> TurnOutcome:
-        booking_requested = _is_booking_intent(message)
-        selection_request = _is_selection_intent(message)
-        explicit_selections = _explicit_selections(message) if selection_request else []
+    def _respond(self, state: SessionState, message: str, parsed: ParsedRequest | None = None) -> TurnOutcome:
+        parsed = parsed or parse_request(message)
+        turn_state_snapshot = (state.criteria, state.last_search, state.selected_flight_id,
+                               state.passenger, state.hold_id, state.booking, state.booking_history)
+        if parsed.conflicts:
+            return make_turn_outcome(intent=Intent.CLARIFY,
+                deterministic_response="I found conflicting details. Please clarify them before I search or book.",
+                fallback_reason="request_conflict")
+        if booking_withdrawn(message):
+            return make_turn_outcome(intent=Intent.CLARIFY,
+                deterministic_response="Understood—I will not proceed with a booking.")
+        booking_requested = parsed.booking_intent
+        # An explicit partial route is a clarification request, not permission
+        # to fill its missing endpoint from the previous search.
+        if parsed.search_intent and ((parsed.origin is None) != (parsed.destination is None)):
+            missing = "destination" if parsed.origin else "departure"
+            return make_turn_outcome(intent=Intent.CLARIFY,
+                deterministic_response=f"Which {missing} airport code should I use?",
+                search_results=state.last_search)
+        if booking_requested and parsed.flight_selections and any(
+                item.flight_id is not None and self.kb.get(item.flight_id) is not None
+                for item in parsed.flight_selections):
+            effective_origin = parsed.origin or state.criteria.origin
+            effective_destination = parsed.destination or state.criteria.destination
+            if not effective_origin or not effective_destination:
+                return make_turn_outcome(intent=Intent.CLARIFY,
+                    deterministic_response="Which departure and destination airport codes should I use?",
+                    search_results=state.last_search,
+                    fallback_reason="selection_not_in_latest_search")
+        affirmative_selection = _is_selection_intent(message) or booking_requested
+        selection_request = parsed.selection_intent and affirmative_selection
+        explicit_selections = [(item.raw, item.flight_id) for item in parsed.flight_selections] if selection_request else []
         explicit_selection = explicit_selections[0] if explicit_selections else None
-        criteria = self._criteria_from_text(message)
-        updates = {name: value for name, value in asdict(criteria).items() if value is not None}
-        if criteria.origin and not criteria.destination and state.criteria.origin:
-            updates["destination"] = criteria.origin
-            updates.pop("origin", None)
+        criteria = SearchCriteria(
+            origin=parsed.origin, destination=parsed.destination,
+            departure_month=parsed.departure_month, departure_day=parsed.departure_day,
+            return_month=parsed.return_month, return_day=parsed.return_day,
+            departure_time=parsed.departure_time, return_time=parsed.return_time,
+            max_price=parsed.max_price, max_connections=parsed.max_connections,
+        )
+        provided_fields = {
+            "origin", "destination", "departure_time", "return_time",
+            "max_price", "max_connections",
+        }
+        if "departure_date" in parsed.provided:
+            provided_fields.update(("departure_month", "departure_day"))
+        if "return_date" in parsed.provided:
+            provided_fields.update(("return_month", "return_day"))
+        updates = {name: value for name, value in asdict(criteria).items()
+                   if name in provided_fields and value is not None}
         material_change = bool(updates and replace(state.criteria, **updates) != state.criteria)
+        next_search = None
         if material_change:
             next_criteria = replace(state.criteria, **updates)
             try:
@@ -557,11 +600,30 @@ class ConversationController:
                 return make_turn_outcome(intent=Intent.REFUSE,
                     deterministic_response="I couldn't safely complete that simulator search. Please try again.",
                     fallback_reason="tool_error:" + type(exc).__name__)
+            transition = plan_state_transition(state, next_criteria)
+            state.booking_history += transition.confirmed_records_to_preserve
             # Invalidate stale transaction state before evaluating any booking intent.
             state.criteria = next_criteria
             state.selected_flight_id = None
             state.hold_id = None
+            state.booking = None
             state.last_search = next_search
+        passenger = parsed.passenger.name if parsed.passenger and parsed.passenger.found else state.passenger
+        passenger_plan = plan_passenger_change(state, passenger)
+        if passenger_plan.active_invalidation.selection:
+            state.booking_history += passenger_plan.confirmed_records_to_preserve
+            # A flight choice remains compatible with a new passenger. Holds
+            # and confirmed references do not, because they bind both values.
+            state.hold_id = None
+            state.booking = None
+        if parsed.passenger and parsed.passenger.found:
+            state.passenger = parsed.passenger.name
+        if parsed.search_intent and (not (parsed.origin or state.criteria.origin)
+                                     or not (parsed.destination or state.criteria.destination)):
+            return make_turn_outcome(intent=Intent.CLARIFY,
+                deterministic_response="Which departure and destination airport codes should I search?",
+                search_results=state.last_search)
+        if material_change:
             if next_search is not None:
                 search = next_search
                 if explicit_selections:
@@ -576,7 +638,7 @@ class ConversationController:
                             search_results=search, fallback_reason="invalid_flight_selection")
                 if not search.flights:
                     return make_turn_outcome(intent=Intent.SEARCH, deterministic_response="I couldn't find a matching flight in the local simulator.", search_results=search)
-                if not booking_requested:
+                if not booking_requested and not selection_request:
                     shown = search.flights[:5]
                     summary = "; ".join(f"{f['flight_number']} ({f['airline']}, ${f['price']})" for f in shown)
                     return make_turn_outcome(intent=Intent.SEARCH, deterministic_response=f"I found these simulated flights: {summary}. Which flight would you like?", search_results=search)
@@ -638,10 +700,17 @@ class ConversationController:
         if booking_requested:
             selected = state.selected_flight_id
             latest = state.last_search
+            if not state.criteria.origin or not state.criteria.destination:
+                return make_turn_outcome(intent=Intent.CLARIFY,
+                    deterministic_response="Which departure and destination airport codes should I use?",
+                    search_results=latest,
+                    fallback_reason="selection_not_in_latest_search")
+            if not state.passenger:
+                return make_turn_outcome(intent=Intent.CLARIFY,
+                    deterministic_response="What name should I use for the passenger?",
+                    search_results=latest)
             if selected is None or latest is None or not any(int(f["flight_number"]) == selected for f in latest.flights):
                 return make_turn_outcome(intent=Intent.REFUSE, deterministic_response="Please select a flight from the latest simulator search before booking.", search_results=latest, fallback_reason="selection_not_in_latest_search")
-            if not state.passenger:
-                return make_turn_outcome(intent=Intent.CLARIFY, deterministic_response="What name should I use for the passenger?", search_results=latest)
             # Verify membership immediately before simulator side effects; only commit state after both succeed.
             if not any(int(f["flight_number"]) == selected for f in state.last_search.flights):
                 return make_turn_outcome(intent=Intent.REFUSE, deterministic_response="That flight is not among the current simulator options.", search_results=latest, fallback_reason="invalid_flight_selection")
@@ -747,11 +816,13 @@ class ConversationController:
                                 else:
                                     self.simulator.bookings.pop(key, None)
                                 self._store_revisions[revision_key] = self._store_revisions.get(revision_key, 0) + 1
-                (state.selected_flight_id, state.passenger, state.hold_id, state.booking) = original_session
+                (state.criteria, state.last_search, state.selected_flight_id,
+                 state.passenger, state.hold_id, state.booking,
+                 state.booking_history) = turn_state_snapshot
                 if isinstance(exc, (_BudgetExceeded, _CapacityExceeded)): raise
                 return make_turn_outcome(intent=Intent.REFUSE, deterministic_response="I couldn't safely complete that simulated booking. Please try again.", search_results=latest, fallback_reason="tool_error:" + type(exc).__name__)
             return booking_outcome
-        if state.criteria.origin and state.criteria.destination and not state.last_search:
+        if state.criteria.origin and state.criteria.destination and not state.last_search and not booking_requested:
             try:
                 self._consume_tool(state)
                 search = self._validated_search(self._bounded_tool_call(

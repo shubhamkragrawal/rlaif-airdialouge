@@ -14,6 +14,7 @@ import math
 import os
 import re
 import resource
+import hashlib
 import sys
 import tempfile
 import time
@@ -26,10 +27,230 @@ from typing import Any, Callable, Iterable, Sequence
 from .controller import ADAPTERS, ConversationController
 from .guardrails import safe_fallback
 from .knowledge import DEFAULT_CORPUS, FlightKnowledgeBase
+from .outcomes import OUTCOME_SCHEMA, OUTCOME_SCHEMA_VERSION
 
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 SAFE_FALLBACK_PREFIX = safe_fallback("").split("complete", 1)[0]
+EVALUATION_LAYERS = {"policy_only", "controller_only", "integrated"}
+LOCAL_PROTOCOL_ID = "local-controller-scenario-v1"
+POLICY_PROTOCOL_ID = "held-out-policy-protocol-v3"
+POLICY_COHORT_ID = "held-out-50-seed20260922"
+INTEGRATED_ADAPTER_PROVENANCE_FIELDS = ("artifact", "sha256")
+INTEGRATED_GENERATION_SETTING_FIELDS = (
+    "mode", "base_model", "revision", "max_new_tokens", "temperature",
+)
+
+
+def _artifact_provenance(paths: Sequence[Path]) -> list[dict[str, str]]:
+    records = []
+    for path in paths:
+        record = {"path": str(path)}
+        if path.is_file():
+            record["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        records.append(record)
+    return records
+
+
+def _sha256_path(path: Path) -> str | None:
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    if path.is_dir():
+        digest = hashlib.sha256()
+        files = sorted(item for item in path.rglob("*") if item.is_file())
+        if not files:
+            return None
+        for item in files:
+            digest.update(item.relative_to(path).as_posix().encode("utf-8"))
+            digest.update(bytes.fromhex(hashlib.sha256(item.read_bytes()).hexdigest()))
+        return digest.hexdigest()
+    return None
+
+
+def _fingerprint_payload(*, layer: str, cohort_id: str, protocol_id: str,
+                         scenario_ids: Sequence[int], corpus_path: Path,
+                         adapter: str, adapter_artifact: Mapping[str, Any],
+                         generation_settings: Mapping[str, Any]) -> dict[str, Any]:
+    root = Path(__file__).resolve().parent
+    controller_path = root / "controller.py"
+    evaluation_path = Path(__file__)
+    corpus_hash = _sha256_path(corpus_path)
+    return {
+        "layer": layer,
+        "cohort_id": cohort_id,
+        "case_ids": list(scenario_ids),
+        "protocol": {"id": protocol_id, "sha256": _sha256_path(evaluation_path)},
+        "controller": {"version": _sha256_path(controller_path),
+                       "schema": OUTCOME_SCHEMA,
+                       "schema_version": OUTCOME_SCHEMA_VERSION},
+        "corpus": {"path": str(corpus_path), "sha256": corpus_hash},
+        "adapter": {"name": adapter, **dict(adapter_artifact)},
+        "generation_settings": dict(generation_settings),
+    }
+
+
+def _with_fingerprint(contract: dict[str, Any], *, scenario_ids: Sequence[int],
+                      corpus_path: Path, adapter: str,
+                      adapter_artifact: Mapping[str, Any],
+                      generation_settings: Mapping[str, Any]) -> dict[str, Any]:
+    details = _fingerprint_payload(
+        layer=contract["layer"], cohort_id=contract["cohort_id"],
+        protocol_id=contract["protocol_id"], scenario_ids=scenario_ids,
+        corpus_path=corpus_path, adapter=adapter,
+        adapter_artifact=adapter_artifact, generation_settings=generation_settings,
+    )
+    encoded = json.dumps(details, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    contract["fingerprint"] = {"sha256": hashlib.sha256(encoded).hexdigest(), **details}
+    return contract
+
+
+def _integrated_provenance_errors(
+    adapter_artifact: Mapping[str, Any],
+    generation_settings: Mapping[str, Any],
+) -> list[str]:
+    """Return fields that prevent an integrated report from being complete."""
+    errors = [
+        f"adapter.{field}"
+        for field in INTEGRATED_ADAPTER_PROVENANCE_FIELDS
+        if adapter_artifact.get(field) in (None, "")
+    ]
+    adapter_hash = adapter_artifact.get("sha256")
+    if adapter_hash not in (None, "") and not re.fullmatch(r"[0-9a-f]{64}", str(adapter_hash)):
+        errors.append("adapter.sha256_invalid")
+    errors.extend(
+        f"generation_settings.{field}"
+        for field in INTEGRATED_GENERATION_SETTING_FIELDS
+        if generation_settings.get(field) is None or generation_settings.get(field) == ""
+    )
+    if generation_settings.get("mode") not in (None, "", "model"):
+        errors.append("generation_settings.mode_invalid")
+    return errors
+
+
+def _integrated_completeness_errors(
+    model_usage: Mapping[str, Any],
+    adapter_artifact: Mapping[str, Any],
+    generation_settings: Mapping[str, Any],
+) -> list[str]:
+    errors = []
+    if model_usage.get("loading_permitted") is not True:
+        errors.append("model_usage.loading_permitted")
+    if model_usage.get("loading_requested") is not True:
+        errors.append("model_usage.loading_requested")
+    model_turns = model_usage.get("model_turns")
+    if not isinstance(model_turns, int) or isinstance(model_turns, bool) or model_turns <= 0:
+        errors.append("model_usage.model_turns")
+    errors.extend(_integrated_provenance_errors(adapter_artifact, generation_settings))
+    return errors
+
+
+def evaluation_layer_contract(
+    layer: str,
+    *,
+    cohort_id: str,
+    protocol_id: str,
+    controller_usage: Mapping[str, Any],
+    model_usage: Mapping[str, Any],
+    provenance: Sequence[Mapping[str, str]],
+    adapter_artifact: Mapping[str, Any] | None = None,
+    generation_settings: Mapping[str, Any] | None = None,
+    status: str = "complete",
+    status_reason: str | None = None,
+) -> dict[str, Any]:
+    """Validate and serialize the shared contract for a single evaluation layer."""
+    if layer not in EVALUATION_LAYERS:
+        raise ValueError(f"unknown evaluation layer: {layer}")
+    if not cohort_id or not protocol_id:
+        raise ValueError("cohort_id and protocol_id are required")
+    if status not in {"complete", "incomplete", "unavailable"}:
+        raise ValueError("status must be complete, incomplete, or unavailable")
+    if not provenance:
+        raise ValueError("evaluation provenance is required")
+    if layer == "controller_only" and model_usage.get("loading_permitted") is not False:
+        raise ValueError("controller_only must forbid model loading")
+    if layer == "policy_only" and controller_usage.get("executed") is not False:
+        raise ValueError("policy_only cannot execute or use controller rescue")
+    if layer == "integrated" and controller_usage.get("executed") is not True:
+        raise ValueError("integrated evaluation requires controller execution")
+    if layer == "integrated" and status == "complete":
+        completeness_errors = _integrated_completeness_errors(
+            model_usage, adapter_artifact or {}, generation_settings or {})
+        if completeness_errors:
+            status = "incomplete"
+            status_reason = ("Integrated evaluation cannot be complete: "
+                             + ", ".join(completeness_errors) + ".")
+    contract = {
+        "layer": layer,
+        "cohort_id": cohort_id,
+        "protocol_id": protocol_id,
+        "controller_usage": dict(controller_usage),
+        "model_usage": dict(model_usage),
+        "provenance": [dict(item) for item in provenance],
+        "status": status,
+        "status_reason": status_reason,
+    }
+    if layer == "integrated":
+        contract["adapter_provenance"] = dict(adapter_artifact or {})
+        contract["generation_settings"] = dict(generation_settings or {})
+    return contract
+
+
+def policy_only_contract(*, root: str | Path | None = None) -> dict[str, Any]:
+    """Reference existing held-out policy evidence without launching evaluation jobs."""
+    project_root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    evidence_paths = [project_root / "rebuild" / "cloud" / "FINAL_RESULTS.md",
+                      project_root / "rebuild" / "eval_NOTES.md"]
+    existing = all(path.is_file() for path in evidence_paths)
+    provenance = _artifact_provenance(evidence_paths)
+    return evaluation_layer_contract(
+        "policy_only", cohort_id=POLICY_COHORT_ID, protocol_id=POLICY_PROTOCOL_ID,
+        controller_usage={"executed": False, "rescue": False},
+        model_usage={"loading_permitted": True, "evidence_source": "existing_artifacts",
+                     "runtime_invoked": False},
+        provenance=provenance,
+        status="incomplete" if existing else "unavailable",
+        status_reason=("Existing artifacts are referenced, but evaluation metrics/results were "
+                       "not imported." if existing else
+                       "Required held-out policy evidence artifact is missing."),
+    )
+
+
+def build_policy_only_report(*, root: str | Path | None = None) -> dict[str, Any]:
+    """Emit an evidence-reference report without loading models or running jobs."""
+    project_root = Path(root) if root is not None else Path(__file__).resolve().parents[1]
+    report_path = project_root / "rebuild" / "cloud" / "FINAL_RESULTS.md"
+    protocol_path = project_root / "rebuild" / "eval_NOTES.md"
+    evidence_paths = [report_path, protocol_path]
+    contract = policy_only_contract(root=project_root)
+    provenance = contract["provenance"]
+    referenced = all(record.get("sha256") for record in provenance)
+    if not referenced:
+        contract["status"] = "incomplete" if any(path.is_file() for path in evidence_paths) else "unavailable"
+        contract["status_reason"] = "One or more required evidence artifacts are missing or unhashed."
+    else:
+        contract["status"] = "incomplete"
+        contract["status_reason"] = "Evidence is referenced but results and metrics were not imported."
+    cohort_id = contract["cohort_id"]
+    _with_fingerprint(
+        contract, scenario_ids=[], corpus_path=project_root / "airdialogue_sampled_5k.jsonl",
+        adapter="all-held-out-arms",
+        adapter_artifact={"artifact": "aggregate-evidence-reference",
+                          "sha256": hashlib.sha256("".join(
+                              str(item.get("sha256", "")) for item in provenance
+                          ).encode("ascii")).hexdigest()},
+        generation_settings={"source": "existing_evidence", "cloud_jobs_launched": False,
+                             "case_count": 50, "seed": 20260922,
+                             "case_ids_source": "protocol manifest referenced in eval_NOTES.md"},
+    )
+    return {
+        "report_version": REPORT_VERSION,
+        "evaluation_layer": contract,
+        "cohort_id": cohort_id,
+        "evidence_artifacts": _artifact_provenance(evidence_paths),
+        "results_imported": False,
+        "summary": None,
+        "scenarios": [],
+    }
 
 
 def peak_process_rss_mb() -> float:
@@ -390,6 +611,9 @@ def build_report(
     corpus_path: str | Path = DEFAULT_CORPUS,
     clock: Callable[[], float] = time.perf_counter,
     model_loader=None,
+    layer: str | None = None,
+    adapter_artifact: Mapping[str, Any] | None = None,
+    generation_settings: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     scenario_list = sorted(scenarios, key=lambda item: item.scenario_id)
     if len({item.scenario_id for item in scenario_list}) != len(scenario_list):
@@ -397,10 +621,57 @@ def build_report(
     results = [run_scenario(item, adapter=adapter, corpus_path=corpus_path, clock=clock,
                             model_loader=model_loader)
                for item in scenario_list]
+    model_turns = sum(row["model_turns"] for row in results)
+    model_fallbacks = sum(row["model_fallbacks"] for row in results)
+    layer = layer or ("integrated" if model_loader is not None else "controller_only")
+    if layer not in {"controller_only", "integrated"}:
+        raise ValueError("build_report supports controller_only or integrated execution")
+    if layer == "controller_only" and model_loader is not None:
+        raise ValueError("controller_only forbids model loading")
+    resolved_adapter_artifact = dict(adapter_artifact or {})
+    resolved_generation_settings = dict(
+        generation_settings or ({"mode": "model"} if layer == "integrated"
+                                else {"mode": "deterministic_controller"})
+    )
+    status = "complete"
+    reason = None
+    if layer == "integrated" and model_loader is None:
+        status = "unavailable"
+        reason = "Integrated run had no model loader available."
+    corpus = Path(corpus_path)
+    cohort_id = "local-" + hashlib.sha256(json.dumps({
+        "ids": [item.scenario_id for item in scenario_list],
+        "corpus_sha256": _sha256_path(corpus),
+    }, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+    layer_contract = evaluation_layer_contract(
+        layer,
+        cohort_id=cohort_id,
+        protocol_id=LOCAL_PROTOCOL_ID,
+        controller_usage={"executed": True, "turns": sum(row["turn_count"] for row in results)},
+        model_usage={"loading_permitted": model_loader is not None,
+                     "loading_requested": model_loader is not None,
+                     "model_turns": model_turns, "fallback_turns": model_fallbacks,
+                     "fallback_reasons": sorted({reason for row in results
+                                                  for reason in row["fallback_reasons"]})},
+        provenance=_artifact_provenance([corpus, Path(__file__),
+                                         Path(__file__).with_name("controller.py"),
+                                         Path(__file__).with_name("outcomes.py")]),
+        adapter_artifact=resolved_adapter_artifact,
+        generation_settings=resolved_generation_settings,
+        status=status,
+        status_reason=reason,
+    )
+    _with_fingerprint(
+        layer_contract, scenario_ids=[item.scenario_id for item in scenario_list],
+        corpus_path=corpus, adapter=adapter,
+        adapter_artifact=resolved_adapter_artifact,
+        generation_settings=resolved_generation_settings,
+    )
     return {
         "report_version": REPORT_VERSION,
+        "evaluation_layer": layer_contract,
         "adapter": adapter,
-        "corpus": Path(corpus_path).name,
+        "corpus": corpus.name,
         "scenario_ids": [item.scenario_id for item in scenario_list],
         "summary": aggregate_results(results),
         "scenarios": results,
@@ -438,16 +709,47 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--model", action="store_true",
                         help="run the selected local Qwen/PEFT adapter")
+    parser.add_argument("--layer", choices=sorted(EVALUATION_LAYERS),
+                        help="evaluation layer (default preserves --model behavior)")
     args = parser.parse_args(argv)
+    layer = args.layer or ("integrated" if args.model else "controller_only")
+    if layer == "policy_only":
+        if args.model:
+            parser.error("--model cannot be combined with --layer policy_only")
+        report = build_policy_only_report()
+        write_report(report, args.output)
+        print(json.dumps({"status": report["evaluation_layer"]["status"],
+                          "layer": "policy_only"}, sort_keys=True))
+        return 0
+    if layer == "controller_only" and args.model:
+        parser.error("--model cannot be combined with --layer controller_only")
+    use_model = layer == "integrated" or args.model
     scenarios = load_scenarios(args.corpus, count=args.count, start=args.start)
     manager = None
-    if args.model:
-        from .runtime import RuntimeManager
-        manager = RuntimeManager()
+    adapter_artifact = {"artifact": None, "sha256": None}
+    generation_settings = {"mode": "deterministic_controller"}
+    if use_model:
+        from .runtime import RuntimeConfig, RuntimeManager
+        config = RuntimeConfig.local_defaults()
+        manager = RuntimeManager(config)
+        configured_path = (config.adapter_paths or {}).get(args.adapter)
+        adapter_path = Path(configured_path) if configured_path else None
+        adapter_hash = _sha256_path(adapter_path) if adapter_path else None
+        adapter_artifact = {"artifact": str(adapter_path) if adapter_path else None,
+                            "sha256": adapter_hash}
+        generation_settings = {
+            "mode": "model",
+            "base_model": config.base_model,
+            "revision": config.revision,
+            "max_new_tokens": config.max_new_tokens,
+            "temperature": config.temperature,
+        }
     try:
         report = build_report(
             scenarios, adapter=args.adapter, corpus_path=args.corpus,
             model_loader=manager.get if manager else None,
+            layer=layer, adapter_artifact=adapter_artifact,
+            generation_settings=generation_settings,
         )
     finally:
         if manager:

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import json
 import threading
-from dataclasses import asdict
+from collections.abc import Mapping
+from dataclasses import fields, is_dataclass
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -59,11 +60,25 @@ class SessionAPI:
 
 
 def _session_payload(session_id: str, state: SessionState) -> dict[str, Any]:
-    payload = asdict(state)
+    payload = {
+        item.name: _json_safe(getattr(state, item.name))
+        for item in fields(state)
+    }
     payload.pop("last_search", None)
     payload["session_id"] = session_id
     payload["simulated"] = True
     return payload
+
+
+def _json_safe(value: Any) -> Any:
+    """Convert state snapshots to JSON values without thawing them in place."""
+    if is_dataclass(value) and not isinstance(value, type):
+        return {item.name: _json_safe(getattr(value, item.name)) for item in fields(value)}
+    if isinstance(value, Mapping):
+        return {key: _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list, set, frozenset)):
+        return [_json_safe(item) for item in value]
+    return value
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8000, api: SessionAPI | None = None):
