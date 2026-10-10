@@ -23,6 +23,7 @@ airdialogue_sampled_5k.jsonl
 rebuild/artifacts/sft_examples.jsonl
 baseline/Offline_rl_datasets/
 baseline/output*.jsonl
+baseline/*.jsonl
 baseline/rlaif_pipeline/*_log.json
 baseline/rlaif_pipeline/plots/
 final_project_ryadav4_sa69_vshinde.pdf
