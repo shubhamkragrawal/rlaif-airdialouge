@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.*
 .venv/
+.local/
 venv/
 build/
 dist/
@@ -15,6 +16,7 @@ dist/
 *.safetensors
 checkpoints/
 outputs/
+local_models/
 vertex_ai_logs/
 rebuild/cloud/build_context.json
 
