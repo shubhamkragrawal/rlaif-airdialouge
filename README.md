@@ -85,3 +85,48 @@ DPO's in-training pair accuracy is shown separately from held-out task success.
 
 See [figure provenance and regeneration](figures/README.md) for source files,
 checks, and limitations.
+
+## Local conversation runtime
+
+The local runtime is under `local_app/`. It uses the
+checked-in AirDialogue scenarios as a deterministic flight knowledge base and
+never contacts an airline, payment provider, model endpoint, or cloud service.
+The controller owns all tool actions and state transitions. A selected Qwen/PEFT
+adapter may phrase grounded responses, but guardrail failures fall back to the
+deterministic controller response.
+
+From `RLAIF/`:
+
+```sh
+pyenv shell 3.12.12               # or use any Python 3.12 interpreter
+python -m venv .venv
+.venv/bin/pip install -r requirements-local.txt
+.venv/bin/python -m local_app.download_adapters  # requires authenticated gsutil
+.venv/bin/python -m unittest discover -s local_app/tests -p 'test*.py'
+.venv/bin/python -m local_app.server             # deterministic, http://127.0.0.1:8000
+.venv/bin/python -m local_app.server --model     # lazy MPS model inference
+.venv/bin/python -m local_app.cli --adapter dpo --model
+```
+
+The API exposes `GET /health`, `GET /adapters`, `POST /sessions`,
+`GET /sessions/{id}`, `POST /sessions/{id}/messages`, and
+`POST /sessions/{id}/reset`. `GET /` serves a small browser UI. It binds to
+localhost by default. Booking is simulator-only and requires a flight returned
+by the current local search. Redacted audit events go to `.local/audit.jsonl`
+by default; set `RLAIF_AUDIT_LOG` to change the path.
+
+The local ML profile pins the final evaluation's resolved Qwen revision
+`aa8e72537993ba99e69dfaafa59ed015b17504d1`. Adapter files live under ignored
+`local_models/{sft,dpo,ppo_checkpoint_19,ppo_adaptive_50}`. The base model is
+cached under `local_models/huggingface` on first `--model` use. Only one policy
+is kept in memory at a time for the 16 GB Apple Silicon profile.
+
+Run the deterministic 50-scenario local regression suite with:
+
+```sh
+.venv/bin/python -m local_app.evaluation --count 50 --adapter sft \
+  --output outputs/local-regression-sft.json
+```
+
+This report is a controller/simulator regression, not a replacement for the
+model-policy held-out evaluations in `rebuild/cloud/FINAL_RESULTS.md`.
