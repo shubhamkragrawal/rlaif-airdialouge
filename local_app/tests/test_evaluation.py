@@ -28,6 +28,13 @@ class StepClock:
         return current
 
 
+class UnsupportedClaimAdapter:
+    last_usage = None
+
+    def generate(self, _messages, _retrieved):
+        return "Booked!"
+
+
 class EvaluationTests(unittest.TestCase):
     def test_load_and_run_book_scenario(self):
         scenario = load_scenarios(CORPUS, count=1)[0]
@@ -55,6 +62,13 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(row["rejection_rate"], 0.25)
         self.assertTrue(row["recovered_after_rejection"])
         self.assertTrue(row["task_success"])
+
+    def test_machine_readable_model_fallback_counts_as_rejection(self):
+        scenario = EvaluationScenario(0, ("Find a flight from IAD to LAS",), "book", (1027,))
+        row = run_scenario(scenario, corpus_path=CORPUS, clock=StepClock(),
+                           model_loader=lambda _name: UnsupportedClaimAdapter())
+        self.assertEqual(row["rejections"], 1)
+        self.assertIn("unsupported_transaction_claim", row["fallback_reasons"])
 
     def test_unavailable_metrics_are_null(self):
         rows = [{

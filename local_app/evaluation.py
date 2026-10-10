@@ -209,6 +209,7 @@ def run_scenario(
     turn_latencies: list[float] = []
     searches = search_valid = bookings = booking_valid = 0
     rejections = 0
+    fallback_reasons: list[str] = []
     had_rejection = False
     recovered = False
     error_types: list[str] = []
@@ -240,7 +241,10 @@ def run_scenario(
         elif model_loader is not None:
             model_fallbacks += 1
 
-        fallback = str(result.get("text", "")).startswith(SAFE_FALLBACK_PREFIX)
+        reason = result.get("fallback_reason") or result.get("validation_reason")
+        if isinstance(reason, str) and reason and reason not in fallback_reasons:
+            fallback_reasons.append(reason)
+        fallback = bool(reason) or str(result.get("text", "")).startswith(SAFE_FALLBACK_PREFIX)
         if fallback:
             rejections += 1
             had_rejection = True
@@ -295,6 +299,7 @@ def run_scenario(
         "tool_valid_calls": valid_tools,
         "tool_validity": _rate(valid_tools, tool_calls),
         "rejections": rejections,
+        "fallback_reasons": fallback_reasons,
         "rejection_rate": _rate(rejections, attempts),
         "recovered_after_rejection": recovered if had_rejection else None,
         "latency_ms": {
