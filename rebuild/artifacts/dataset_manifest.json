@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "files": {
+    "source": {
+      "path": "airdialogue_sampled_5k.jsonl",
+      "sha256": "2ee4061571077a338e3802317ce562f0cd8c5f2ed47fe01ffa479e1a5a8c33b3"
+    },
+    "splits": {
+      "path": "rebuild/artifacts/splits.json",
+      "sha256": "c11d3dd8d27d937ea875aaf255185ec7b1c528701a201c48eb530c97fafc5657"
+    },
+    "sft_examples": {
+      "path": "rebuild/artifacts/sft_examples.jsonl",
+      "sha256": "1ea562a29982391a42abe32ee824fb13931db7eb7a5974371fce7b95523b5457"
+    }
+  },
+  "note": "Regenerate this manifest only as part of a new, explicitly documented dataset version."
+}
