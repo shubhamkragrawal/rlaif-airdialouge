@@ -1,0 +1,34 @@
+.DS_Store
+__pycache__/
+*.py[cod]
+.claude/settings.local.json
+.env
+.env.*
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Local and cloud-generated experiment outputs
+*.pt
+*.safetensors
+checkpoints/
+outputs/
+vertex_ai_logs/
+rebuild/cloud/build_context.json
+
+# Large or potentially restricted datasets are published separately after review
+airdialogue_sampled_5k.jsonl
+rebuild/artifacts/sft_examples.jsonl
+baseline/Offline_rl_datasets/
+baseline/output*.jsonl
+baseline/rlaif_pipeline/*_log.json
+baseline/rlaif_pipeline/plots/
+final_project_ryadav4_sa69_vshinde.pdf
+INTERVIEW_PREP.md
+
+# Internal ledgers and private run records
+rebuild/cloud/budget.json
+rebuild/cloud/STATUS.md
+rebuild/cloud/build_context.json
