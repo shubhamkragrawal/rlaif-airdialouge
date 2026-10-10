@@ -70,6 +70,20 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(row["rejections"], 1)
         self.assertIn("unsupported_transaction_claim", row["fallback_reasons"])
 
+    def test_evaluation_records_estimated_tokens_when_adapter_omits_usage(self):
+        class UnreportedUsageAdapter:
+            def generate(self, _messages, _retrieved):
+                return "Flight 1027 is the grounded choice at $100."
+
+        scenario = EvaluationScenario(
+            0, ("Find a flight from IAD to LAS under $100",), "book", (1027,))
+        row = run_scenario(scenario, corpus_path=CORPUS, clock=StepClock(),
+                           model_loader=lambda _name: UnreportedUsageAdapter())
+        self.assertEqual(row["model_turns"], 1)
+        self.assertGreater(row["tokens"]["input"], 0)
+        self.assertEqual(row["tokens"]["output"],
+                         len("Flight 1027 is the grounded choice at $100.".encode("utf-8")))
+
     def test_unavailable_metrics_are_null(self):
         rows = [{
             "task_success": False, "completed": False, "turn_count": 0,
@@ -83,6 +97,20 @@ class EvaluationTests(unittest.TestCase):
         self.assertIsNone(summary["tool_validity"])
         self.assertIsNone(summary["recovery_rate"])
         self.assertIsNone(summary["mean_latency_ms"]["first_response"])
+
+    def test_malformed_token_and_rss_metrics_are_sanitized(self):
+        rows = [{
+            "task_success": False, "completed": False, "turn_count": 0,
+            "turn_attempts": 0, "search_calls": 0, "search_valid_calls": 0,
+            "tool_calls": 0, "tool_valid_calls": 0, "rejections": 0,
+            "recovered_after_rejection": None,
+            "latency_ms": {"first_response": None, "completed_action": None},
+            "tokens": {"input": "not-a-count", "output": None},
+            "peak_process_rss_mb": float("nan"),
+        }]
+        summary = aggregate_results(rows)
+        self.assertEqual(summary["tokens"], {"input": 0, "output": 0})
+        self.assertEqual(summary["peak_process_rss_mb"], 0.0)
 
     def test_report_is_sorted_and_canonical(self):
         scenarios = [

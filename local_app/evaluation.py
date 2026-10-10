@@ -17,6 +17,7 @@ import resource
 import sys
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from statistics import mean
@@ -181,6 +182,11 @@ def _rate(numerator: int, denominator: int) -> float | None:
     return numerator / denominator if denominator else None
 
 
+def _safe_count(value: Any) -> int:
+    """Keep malformed model metadata from breaking evaluation aggregation."""
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
+
+
 def wilson_interval(successes: int, total: int, z: float = 1.959963984540054) -> list[float] | None:
     """Return a 95% Wilson score interval, or ``None`` for an empty sample."""
 
@@ -235,9 +241,10 @@ def run_scenario(
             first_response_ms = (turn_ended - started) * 1000
         if result.get("model_used"):
             model_turns += 1
-            usage = result.get("usage") or {}
-            input_tokens += int(usage.get("input_tokens", 0))
-            output_tokens += int(usage.get("output_tokens", 0))
+            usage = result.get("usage")
+            if isinstance(usage, Mapping):
+                input_tokens += _safe_count(usage.get("input_tokens"))
+                output_tokens += _safe_count(usage.get("output_tokens"))
         elif model_loader is not None:
             model_fallbacks += 1
 
@@ -336,9 +343,20 @@ def aggregate_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
     turns = [int(row["turn_count"]) for row in results]
     model_turns = sum(int(row.get("model_turns", 0)) for row in results)
     model_fallbacks = sum(int(row.get("model_fallbacks", 0)) for row in results)
-    input_tokens = sum(int((row.get("tokens") or {}).get("input", 0)) for row in results)
-    output_tokens = sum(int((row.get("tokens") or {}).get("output", 0)) for row in results)
-    peak_rss = max((float(row.get("peak_process_rss_mb", 0)) for row in results), default=0.0)
+    input_tokens = sum(_safe_count((row.get("tokens") or {}).get("input"))
+                       for row in results if isinstance(row.get("tokens") or {}, dict))
+    output_tokens = sum(_safe_count((row.get("tokens") or {}).get("output"))
+                        for row in results if isinstance(row.get("tokens") or {}, dict))
+    rss_values = []
+    for row in results:
+        value = row.get("peak_process_rss_mb", 0)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError, OverflowError):
+            continue
+        if math.isfinite(parsed) and parsed >= 0:
+            rss_values.append(parsed)
+    peak_rss = max(rss_values, default=0.0)
     return {
         "scenario_count": total,
         "task_successes": successes,

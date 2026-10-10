@@ -3,24 +3,51 @@
 from __future__ import annotations
 
 import re
-import json
-from copy import deepcopy
+import inspect
+import math
+import threading
+from hashlib import sha256
+from copy import copy, deepcopy
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field, replace
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, ClassVar
 
-from .guardrails import (TransactionClaimError, detect_transaction_claim, safe_fallback,
-                         validate_grounding, validate_input, validate_transaction_claim)
+from .guardrails import safe_fallback, validate_input
 from .knowledge import FlightKnowledgeBase
 from .outcomes import (Intent, TurnOutcome, make_turn_outcome,
                        validate_booking_evidence, validate_hold_result)
 from .tools import FlightSearchResult, FlightSimulator, SearchCriteria, flight_dict
+from .parsing import parse_passenger_name
+from .output_validation import validate_output
+from .limits import ExecutionBudget, ExecutionLimits, LimitReason
 
 if TYPE_CHECKING:
     from .runtime import ModelAdapter
 
 ADAPTERS = ("sft", "dpo", "ppo_checkpoint_19", "ppo_adaptive_50")
 BOOKING_COMMAND_PATTERN = r"(?:book|reserve|confirm|proceed\s+with|continue\s+with|go\s+ahead\s+with)"
+
+
+def _normalize_passenger_introducers(text: str) -> str:
+    """Canonicalize only explicit passenger introducers before parsing."""
+    return re.sub(
+        r"\bmy\s+name\s+is\b|\bbook\s+for\b|\bpassenger\b",
+        lambda match: re.sub(r"\s+", " ", match.group(0)).casefold(),
+        text, flags=re.I,
+    )
+
+
+def _parse_controller_passenger(text: str):
+    parsed = parse_passenger_name(_normalize_passenger_introducers(text))
+    phrase = (parsed.matched_phrase or "").casefold()
+    if (parsed.status == "rejected"
+            and parsed.reason == "airport_code_or_acronym"
+            and phrase in {"my name is", "book for", "passenger", "for"}
+            and parsed.candidate
+            and (phrase != "for" or len(parsed.candidate.split()) >= 2)
+            and parsed.candidate == parsed.candidate.upper()):
+        parsed = parse_passenger_name("passenger " + parsed.candidate.title())
+    return parsed
 
 
 def _normalize_intent_text(text: str) -> str:
@@ -82,7 +109,7 @@ def _explicit_selections(text: str) -> list[tuple[str, int | None]]:
         tokens = [m.group(1)] if m else []
     selections = []
     for token in tokens:
-        if token.lower() in {"it", "this", "that", "the", "a", "my", "our", "booking", "reservation", "flight"}:
+        if token.lower() in {"it", "this", "that", "the", "a", "my", "our", "for", "booking", "reservation", "flight"}:
             continue
         if re.fullmatch(r"\d+\.", token):
             token = token[:-1]
@@ -118,6 +145,19 @@ class SessionState:
     booking: dict[str, Any] | None = None
     criteria: SearchCriteria = field(default_factory=SearchCriteria)
     turn_count: int = 0
+    budget: ClassVar[ExecutionBudget | None] = None
+
+
+class _BudgetExceeded(RuntimeError):
+    def __init__(self, reasons):
+        self.reasons = reasons
+        super().__init__(reasons[0].value)
+
+
+class _CapacityExceeded(RuntimeError):
+    def __init__(self, capacity):
+        self.reason = f"{capacity}_capacity_exceeded"
+        super().__init__(self.reason)
 
 
 class ConversationController:
@@ -129,13 +169,20 @@ class ConversationController:
         audit=None,
         model_adapters: Mapping[str, "ModelAdapter"] | None = None,
         model_loader: Callable[[str], "ModelAdapter"] | None = None,
+        limits: ExecutionLimits | None = None,
     ):
         self.kb = kb or FlightKnowledgeBase()
         self.simulator = FlightSimulator(self.kb)
         self.max_turns = max_turns
+        self.limits = limits or ExecutionLimits(max_turns=max_turns)
         self.audit = audit
         self.model_adapters = dict(model_adapters or {})
         self.model_loader = model_loader
+        self._adapter_call_lock = threading.Lock()
+        self._call_workers = {"model": 0, "tool": 0}
+        self._call_limits = {"model": 2, "tool": 2}
+        self._store_revision_lock = threading.Lock()
+        self._store_revisions: dict[tuple[str, str], int] = {}
         unknown = set(self.model_adapters) - set(ADAPTERS)
         if unknown:
             raise ValueError(f"unknown model adapter configuration: {', '.join(sorted(unknown))}")
@@ -143,19 +190,58 @@ class ConversationController:
     def new_session(self, adapter: str = "sft") -> SessionState:
         if adapter not in ADAPTERS:
             raise ValueError(f"unknown adapter: {adapter}; choose from {', '.join(ADAPTERS)}")
-        return SessionState(adapter=adapter)
+        state = SessionState(adapter=adapter)
+        state.budget = ExecutionBudget(self.limits)
+        return state
 
     def handle(self, state: SessionState, message: str) -> dict[str, Any]:
         message = validate_input(message)
+        parsed_passenger = _parse_controller_passenger(message)
         if self.audit:
-            self.audit.write("user_message", {"adapter": state.adapter, "message": message})
-        if state.turn_count >= self.max_turns:
-            return {"text": safe_fallback("this conversation because the turn limit was reached"),
-                    "simulated": True}
+            if parsed_passenger.found:
+                self.audit.register_passenger(parsed_passenger.name)
+            self.audit.write("user_message", {"adapter": state.adapter, "message": message,
+                                               "passenger_name": parsed_passenger.name,
+                                               "passenger_candidate": parsed_passenger.candidate
+                                               if parsed_passenger.status == "rejected" else None})
+        budget = state.budget or ExecutionBudget(self.limits)
+        state.budget = budget
+        reasons = budget.consume_turn()
+        if reasons:
+            return self._limit_response(reasons, state)
         state.turn_count += 1
         state.turns.append({"role": "user", "content": message})
+        if parsed_passenger.found:
+            state.passenger = parsed_passenger.name
+        elif (parsed_passenger.status == "rejected" and
+              ((parsed_passenger.matched_phrase or "").casefold() in {"passenger", "book for", "my name is"}
+               or parsed_passenger.reason not in {"command_or_airport_code", "airport_code_or_acronym"}
+               or (parsed_passenger.matched_phrase == "for"
+                   and len((parsed_passenger.candidate or "").split()) >= 2
+                   and not re.search(r"\b(?:flight|reservation|booking|please|today|tomorrow)\b",
+                                     parsed_passenger.candidate or "", re.I)))):
+            # An explicit but rejected passenger must never inherit a previous
+            # passenger from session state.
+            state.passenger = None
+            reason = "passenger_" + (parsed_passenger.reason or "invalid")
+            response = "I couldn't use that passenger name. Please provide a valid name up to 100 characters."
+            state.turns.append({"role": "assistant", "content": response})
+            result = {"text": response, "adapter": state.adapter, "turn": state.turn_count,
+                      "results": [], "simulated": True, "model_used": False,
+                      "usage": None, "fallback_reason": reason, "validation_reason": reason}
+            if self.audit: self.audit.write("assistant_response", result)
+            return result
         try:
             outcome = self._respond(state, message)
+        except _BudgetExceeded as exc:
+            reason = exc.reasons[0].value
+            outcome = make_turn_outcome(intent=Intent.REFUSE,
+                deterministic_response=self._limit_response(exc.reasons, state)["text"],
+                fallback_reason=reason)
+        except _CapacityExceeded as exc:
+            outcome = make_turn_outcome(intent=Intent.REFUSE,
+                deterministic_response="The simulator is temporarily at capacity. Please try again.",
+                fallback_reason=exc.reason)
         except Exception as exc:
             outcome = make_turn_outcome(
                 intent=Intent.REFUSE,
@@ -170,14 +256,21 @@ class ConversationController:
             results = (outcome.booking_result["flight"],)
         try:
             if outcome.fallback_reason is None:
-                self._validate_model_output(outcome.deterministic_response, outcome)
-        except ValueError:
-            outcome = make_turn_outcome(intent=Intent.REFUSE, deterministic_response=safe_fallback("that response"), fallback_reason="grounding_validation_failed")
+                errors = validate_output(outcome.deterministic_response, outcome)
+                if errors: raise ValueError(errors[0].code)
+        except ValueError as exc:
+            code = str(exc) or "malformed_output"
+            outcome = make_turn_outcome(intent=Intent.REFUSE, deterministic_response=safe_fallback("that response"), fallback_reason=code)
             authoritative_text = True
         if authoritative_text:
             response, model_used, usage = outcome.deterministic_response, False, None
         else:
             response, model_used, usage, model_fallback_reason = self._model_response(state, outcome)
+            deadline_reasons = state.budget.exceeded_reasons() if state.budget else ()
+            if deadline_reasons:
+                model_used, usage = False, None
+                response = outcome.deterministic_response
+                model_fallback_reason = deadline_reasons[0].value
             if not model_used and (self.model_adapters.get(state.adapter) is not None or self.model_loader is not None):
                 outcome = replace(outcome, fallback_reason=model_fallback_reason or "model_validation_failed")
         state.turns.append({"role": "assistant", "content": response})
@@ -218,30 +311,200 @@ class ConversationController:
         ]
         try:
             adapter = self.model_adapters.get(state.adapter)
-            if adapter is None and self.model_loader is not None:
-                adapter = self.model_loader(state.adapter)
-            if adapter is None:
+            if adapter is None and self.model_loader is None:
                 return deterministic_response, False, None, None
-            response = adapter.generate(messages, retrieved)
-            self._validate_model_output(response, outcome)
+            if self.limits.max_generation_tokens == 0:
+                return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value
+            reasons = state.budget.check_generation_length(self.limits.max_generation_tokens) if state.budget else ()
+            if reasons:
+                return deterministic_response, False, None, reasons[0].value
+            remaining = state.budget.remaining_seconds() if state.budget else self.limits.max_session_seconds
+            def load_and_generate(cancel_event):
+                if adapter is not None:
+                    loaded = adapter
+                else:
+                    loader_params = inspect.signature(self.model_loader).parameters
+                    loader_kwargs = {}
+                    if "cancel_event" in loader_params: loader_kwargs["cancel_event"] = cancel_event
+                    if "deadline_seconds" in loader_params: loader_kwargs["deadline_seconds"] = remaining
+                    loaded = self.model_loader(state.adapter, **loader_kwargs)
+                if cancel_event.is_set():
+                    raise TimeoutError("session_time_exceeded")
+                generate = loaded.generate
+                try:
+                    parameters = inspect.signature(generate).parameters
+                except (TypeError, ValueError):
+                    parameters = {}
+                kwargs = {}
+                if "max_new_tokens" in parameters:
+                    kwargs["max_new_tokens"] = min(self.limits.max_generation_tokens,
+                        max(0, math.ceil(remaining * max(1, self.limits.max_generation_tokens) /
+                                   max(self.limits.max_session_seconds, 1e-9))))
+                if "deadline_seconds" in parameters:
+                    kwargs["deadline_seconds"] = remaining
+                if "cancel_event" in parameters:
+                    kwargs["cancel_event"] = cancel_event
+                return generate(messages, retrieved, **kwargs), loaded
+
+            response, adapter = self._bounded_adapter_call(load_and_generate, remaining)
+            usage = getattr(adapter, "last_usage", None)
+            if isinstance(usage, Mapping):
+                input_tokens = usage.get("input_tokens")
+                output_tokens = usage.get("output_tokens")
+                if isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens > self.limits.max_generation_tokens:
+                    return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value
+                if (isinstance(input_tokens, bool) or not isinstance(input_tokens, int) or input_tokens <= 0
+                        or isinstance(output_tokens, bool) or not isinstance(output_tokens, int) or output_tokens <= 0):
+                    return deterministic_response, False, None, "malformed_usage"
+            elif usage is None and isinstance(response, str):
+                # UTF-8 bytes provide a deterministic conservative upper bound
+                # when the adapter does not report counters.
+                input_tokens = len(repr((messages, retrieved)).encode("utf-8"))
+                output_tokens = len(response.encode("utf-8"))
+                if output_tokens > self.limits.max_generation_tokens:
+                    return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value
+                usage = {"input_tokens": input_tokens, "output_tokens": output_tokens,
+                         "estimated": True}
+            else:
+                return deterministic_response, False, None, "malformed_usage"
+            if state.budget and state.budget.exceeded_reasons():
+                reason = state.budget.exceeded_reasons()[0].value
+                return deterministic_response, False, None, reason
+            errors = validate_output(response, outcome)
+            if errors:
+                raise ValueError(errors[0].code)
         except Exception as exc:
             if self.audit:
                 self.audit.write(
                     "model_fallback",
-                    {"adapter": state.adapter, "error_type": type(exc).__name__},
+                    {"adapter": state.adapter, "error_type": type(exc).__name__,
+                     "worker_active": self.adapter_worker_active,
+                     "limitation": ("non_cooperative_call_remains_in_a_bounded_isolated_worker"
+                                    if self.adapter_worker_active else None)},
                 )
-            reason = ("unsupported_transaction_claim" if "unsupported_transaction_claim" in str(exc)
-                      else "model_validation_failed")
+            reason = (state.budget.exceeded_reasons()[0].value if isinstance(exc, TimeoutError) and state.budget and state.budget.exceeded_reasons()
+                      else str(exc) if str(exc) in {"model_capacity_exceeded", "tool_capacity_exceeded"}
+                      else "model_timeout") if isinstance(exc, TimeoutError) else str(exc) if str(exc) in {"unsupported_transaction_claim", "simulator_disclosure_missing",
+                                               "turn_limit_exceeded", "retry_limit_exceeded",
+                                               "tool_call_limit_exceeded", "session_time_exceeded",
+                                               "generation_length_exceeded"} else (
+                next((e.code for e in validate_output(response, outcome)), "model_runtime_error")
+                if 'response' in locals() else "model_runtime_error")
             return deterministic_response, False, None, reason
-        return response.strip(), True, getattr(adapter, "last_usage", None), None
+        return response.strip(), True, usage, None
+
+    @property
+    def adapter_worker_active(self) -> bool:
+        with self._adapter_call_lock:
+            return self._call_workers["model"] > 0
+
+    def _bounded_adapter_call(self, invoke, timeout, *, capacity="model"):
+        """Bound model and tool calls in independent capacity pools."""
+        with self._adapter_call_lock:
+            if self._call_workers[capacity] >= self._call_limits[capacity]:
+                raise TimeoutError(f"{capacity}_capacity_exceeded")
+            self._call_workers[capacity] += 1
+        done = threading.Event()
+        cancel_event = threading.Event()
+        outcome: dict[str, Any] = {}
+
+        def run():
+            try:
+                outcome["value"] = invoke(cancel_event)
+            except BaseException as exc:
+                outcome["error"] = exc
+            finally:
+                with self._adapter_call_lock:
+                    self._call_workers[capacity] -= 1
+                done.set()
+
+        threading.Thread(target=run, name=f"rlaif-{capacity}-call", daemon=True).start()
+        if not done.wait(max(0.0, timeout)):
+            cancel_event.set()
+            raise TimeoutError("model_timeout")
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("value")
 
     @staticmethod
     def _outcome_flights(outcome: TurnOutcome) -> tuple[Mapping[str, Any], ...]:
-        if outcome.booking_result is not None:
-            return (outcome.booking_result["flight"],)
-        if outcome.search_results is not None:
-            return outcome.search_results.flights[:5]
-        return ()
+        from .output_validation import _flights
+        return _flights(outcome)
+
+    @staticmethod
+    def _limit_response(reasons, state):
+        reason = reasons[0].value if hasattr(reasons[0], "value") else str(reasons[0])
+        label = {"turn_limit_exceeded":"turn limit", "session_time_exceeded":"session time limit",
+                 "tool_call_limit_exceeded":"tool call limit", "retry_limit_exceeded":"retry limit",
+                 "generation_length_exceeded":"generation length limit"}.get(reason, "execution limit")
+        text = f"I can't continue this simulator request because the {label} was reached."
+        return {"text":text,"adapter":state.adapter,"turn":state.turn_count,"results":[],"simulated":True,
+                "model_used":False,"usage":None,"fallback_reason":reason,"validation_reason":reason}
+
+    @staticmethod
+    def _consume_tool(state):
+        reasons = state.budget.consume_tool_call() if state.budget else ()
+        if reasons:
+            raise _BudgetExceeded(reasons)
+
+    @staticmethod
+    def _check_deadline(state):
+        reasons = state.budget.exceeded_reasons() if state.budget else ()
+        if reasons:
+            raise _BudgetExceeded(reasons)
+
+    def _bounded_tool_call(self, state, invoke, *, restore_shared=False):
+        """Bound read-only simulator calls by the same session deadline."""
+        self._check_deadline(state)
+        remaining = state.budget.remaining_seconds() if state.budget else self.limits.max_session_seconds
+        try:
+            def isolated(_cancel):
+                # Wrappers may close over the live simulator despite receiving
+                # a staged copy. Capture only this transaction's owned keys;
+                # whole-store restoration can erase another session's writes.
+                owned = restore_shared if isinstance(restore_shared, Mapping) else None
+                revision_keys = [(store_name, key)
+                                 for store_name in ("holds", "bookings")
+                                 for key in (owned or {}).get(store_name, ())]
+                with self._store_revision_lock:
+                    revisions = {key: self._store_revisions.get(key, 0)
+                                 for key in revision_keys}
+                before_holds = {key: deepcopy(self.simulator.holds.get(key))
+                                for key in (owned or {}).get("holds", ())}
+                before_bookings = {key: deepcopy(self.simulator.bookings.get(key))
+                                   for key in (owned or {}).get("bookings", ())}
+                try:
+                    value = invoke()
+                    return value
+                finally:
+                    if _cancel.is_set():
+                        hold_keys = set(before_holds)
+                        booking_keys = set(before_bookings)
+                        if isinstance(locals().get("value"), Mapping):
+                            if isinstance(value.get("hold_id"), str): hold_keys.add(value["hold_id"])
+                            if isinstance(value.get("booking_id"), str): booking_keys.add(value["booking_id"])
+                        for store, before, keys in (
+                                (self.simulator.holds, before_holds, hold_keys),
+                                (self.simulator.bookings, before_bookings, booking_keys)):
+                            for key in keys:
+                                store_name = "holds" if store is self.simulator.holds else "bookings"
+                                revision_key = (store_name, key)
+                                with self._store_revision_lock:
+                                    unchanged = (self._store_revisions.get(revision_key, 0)
+                                                 == revisions.get(revision_key, 0))
+                                    if not unchanged:
+                                        continue
+                                    if key in before and before[key] is not None:
+                                        store[key] = before[key]
+                                    else:
+                                        store.pop(key, None)
+            value = self._bounded_adapter_call(isolated, remaining, capacity="tool")
+        except TimeoutError as exc:
+            if str(exc) == "tool_capacity_exceeded":
+                raise _CapacityExceeded("tool") from exc
+            raise _BudgetExceeded((LimitReason.SESSION_TIME,)) from exc
+        self._check_deadline(state)
+        return value
 
     def _validated_search(self, value: Any, criteria: SearchCriteria) -> FlightSearchResult:
         if not isinstance(value, FlightSearchResult) or value.criteria != criteria:
@@ -265,58 +528,9 @@ class ConversationController:
 
     @classmethod
     def _validate_model_output(cls, response: str, outcome: TurnOutcome) -> None:
-        if not isinstance(response, str) or not response.strip():
-            raise ValueError("model returned an empty or non-text response")
-        if len(response) > 4000:
-            raise ValueError("model response is too long")
-        stripped = response.strip()
-        try:
-            raw_value = json.loads(stripped)
-        except (ValueError, TypeError):
-            raw_value = None
-        if stripped in {"[]", "{}"} or isinstance(raw_value, (dict, list)):
-            raise ValueError("model returned raw structured data")
-        if re.search(r"(?i)(?:sessionstate\s*\(|\b(?:state|selected_flight_id|last_search|hold_id|booking)\s*[:=])", stripped):
-            raise ValueError("model returned internal state")
-        results = cls._outcome_flights(outcome)
-        validate_grounding(response, results)
-
-        # Prices are grounded separately because the shared flight-ID validator
-        # intentionally ignores ordinary numbers such as stop counts.
-        mentioned_prices = {int(value) for value in re.findall(r"\$\s*(\d+)", response)}
-        known_prices = {int(flight["price"]) for flight in results}
-        if mentioned_prices - known_prices:
-            raise ValueError("response mentions prices outside the retrieved context")
-        lowered = response.lower()
-        if results and re.search(r"\b(?:no|not any)\s+(?:matching\s+|available\s+)?flights?\b", lowered):
-            raise ValueError("response contradicts the non-empty search result")
-        if any(claim in lowered for claim in (
-            "payment was charged", "real reservation", "airline confirmation number"
-        )):
-            raise ValueError("response makes an unsupported real-transaction claim")
-        if detect_transaction_claim(response):
-            booking = outcome.booking_result
-            hold = outcome.hold_result
-            evidence = None if booking is None else {
-                "booking_id": booking.get("booking_id"), "hold_id": booking.get("hold_id"),
-                "flight": booking.get("flight"),
-                "flight_id": booking.get("flight", {}).get("flight_number"),
-                "passenger": booking.get("passenger"), "status": booking.get("status"),
-                "simulated": booking.get("simulated"), "hold": hold,
-            }
-            try:
-                validate_transaction_claim(response, evidence)
-            except TransactionClaimError as exc:
-                raise ValueError(exc.reason) from exc
-        if outcome.simulator_disclosure_required and "simulat" not in lowered:
-            raise ValueError("transaction response must state that the transaction is simulated")
-
-    def _extract_state(self, state: SessionState, message: str) -> None:
-        ids = [int(value) for value in re.findall(r"\b\d{3,5}\b", message)]
-        if ids and state.last_search and any(int(f["flight_number"]) == ids[-1] for f in state.last_search.flights):
-            state.selected_flight_id = ids[-1]
-        if re.search(r"\b(my name is|name is)\b", message, re.I):
-            state.passenger = re.split(r"\b(?:my name is|name is)\b", message, flags=re.I)[-1].strip(" .")
+        errors = validate_output(response, outcome)
+        if errors:
+            raise ValueError(errors[0].code)
 
     def _respond(self, state: SessionState, message: str) -> TurnOutcome:
         booking_requested = _is_booking_intent(message)
@@ -332,11 +546,14 @@ class ConversationController:
         if material_change:
             next_criteria = replace(state.criteria, **updates)
             try:
-                raw_search = (self.simulator.search_flights(next_criteria)
+                if next_criteria.origin and next_criteria.destination: self._consume_tool(state)
+                raw_search = (self._bounded_tool_call(state, lambda: self.simulator.search_flights(next_criteria))
                               if next_criteria.origin and next_criteria.destination else None)
+                if next_criteria.origin and next_criteria.destination: self._check_deadline(state)
                 next_search = (self._validated_search(raw_search, next_criteria)
                                if next_criteria.origin and next_criteria.destination else None)
             except Exception as exc:
+                if isinstance(exc, (_BudgetExceeded, _CapacityExceeded)): raise
                 return make_turn_outcome(intent=Intent.REFUSE,
                     deterministic_response="I couldn't safely complete that simulator search. Please try again.",
                     fallback_reason="tool_error:" + type(exc).__name__)
@@ -373,17 +590,12 @@ class ConversationController:
             return make_turn_outcome(intent=Intent.REFUSE, deterministic_response=f"Flight {token} is not among the current simulator options. Please choose a flight from the latest search.", search_results=state.last_search, fallback_reason="invalid_flight_selection")
         if explicit_selection and explicit_id is not None and state.last_search:
             state.selected_flight_id = explicit_id
-        passenger_match = re.search(r"\b(?:my name is|name is|book for|passenger)\s+([A-Z][A-Za-z'’-]*(?:\s+[A-Z][A-Za-z'’-]*){1,3})|\b([A-Z][A-Za-z'’-]+(?:\s+[A-Z][A-Za-z'’-]+){1,3})\s+is traveling", message)
-        if passenger_match:
-            state.passenger = (passenger_match.group(1) or passenger_match.group(2)).strip()[:100]
         if booking_requested and state.booking is not None:
             cached = state.booking
             prior_hold = self.simulator.holds.get(state.hold_id)
             latest_flight = (next((f for f in state.last_search.flights
                                   if int(f["flight_number"]) == state.selected_flight_id), None)
                              if state.last_search else None)
-            existing_bookings = deepcopy(self.simulator.bookings)
-            existing_holds = deepcopy(self.simulator.holds)
             try:
                 if (not isinstance(cached, dict) or state.hold_id != cached.get("hold_id")
                         or not isinstance(prior_hold, dict) or latest_flight is None
@@ -397,7 +609,11 @@ class ConversationController:
                         or prior_hold["flight"] != latest_flight
                         or prior_hold["passenger"] != state.passenger):
                     raise ValueError("persisted hold does not match current search and passenger")
-                fresh_booking = self.simulator.book_flight(state.hold_id)
+                self._consume_tool(state)
+                fresh_booking = self._bounded_tool_call(
+                    state, lambda: self.simulator.book_flight(state.hold_id),
+                    restore_shared={"holds": (state.hold_id,),
+                                    "bookings": (cached.get("booking_id"),)})
                 validate_booking_evidence(fresh_booking, prior_hold)
                 # Re-read both stores after the simulator call: a hook or
                 # concurrent mutation must not leave confirmation based on a
@@ -411,12 +627,11 @@ class ConversationController:
                         or fresh_booking["passenger"] != state.passenger
                         or fresh_booking["flight"]["flight_number"] != state.selected_flight_id):
                     raise ValueError("fresh booking evidence differs from cached booking")
-                return self._booking_outcome(fresh_booking, prior_hold)
-            except Exception:
-                self.simulator.bookings.clear()
-                self.simulator.bookings.update(existing_bookings)
-                self.simulator.holds.clear()
-                self.simulator.holds.update(existing_holds)
+                outcome = self._booking_outcome(fresh_booking, prior_hold)
+                self._check_deadline(state)
+                return outcome
+            except Exception as exc:
+                if isinstance(exc, (_BudgetExceeded, _CapacityExceeded)): raise
                 state.booking = None
                 state.hold_id = None
                 return make_turn_outcome(intent=Intent.REFUSE, deterministic_response="I couldn't verify the earlier simulated booking. Please reset the session before trying again.", fallback_reason="stale_booking_evidence")
@@ -433,8 +648,23 @@ class ConversationController:
             original_session = (state.selected_flight_id, state.passenger, state.hold_id, state.booking)
             simulator_holds = deepcopy(self.simulator.holds)
             simulator_bookings = deepcopy(self.simulator.bookings)
+            hold_id = "hold_" + sha256(f"{int(selected)}\0{state.passenger.strip()}".encode("utf-8")).hexdigest()[:24]
+            booking_id = "booking_" + sha256(hold_id.encode("utf-8")).hexdigest()[:24]
+            transaction_keys = (("holds", hold_id), ("bookings", booking_id))
+            with self._store_revision_lock:
+                transaction_revisions = {
+                    key: self._store_revisions.get(key, 0) for key in transaction_keys
+                }
+            owned_revisions = None
+            staged_simulator = copy(self.simulator)
+            staged_simulator.holds = deepcopy(self.simulator.holds)
+            staged_simulator.bookings = deepcopy(self.simulator.bookings)
             try:
-                hold = self.simulator.hold_flight(selected, state.passenger)
+                self._consume_tool(state)
+                hold = self._bounded_tool_call(
+                    state, lambda: staged_simulator.hold_flight(selected, state.passenger),
+                    restore_shared={"holds": (hold_id,)})
+                self._check_deadline(state)
                 validate_hold_result(hold)
                 requested_flight = next(f for f in latest.flights
                                         if int(f["flight_number"]) == selected)
@@ -442,32 +672,93 @@ class ConversationController:
                         or dict(hold["flight"]) != dict(requested_flight)
                         or hold["passenger"] != state.passenger.strip()):
                     raise ValueError("hold does not match the selected current-search flight and passenger")
-                if self.simulator.holds.get(hold["hold_id"]) != hold:
+                if staged_simulator.holds.get(hold["hold_id"]) != hold:
                     raise ValueError("returned hold does not exactly match simulator storage")
-                booking = self.simulator.book_flight(hold["hold_id"])
+                self._consume_tool(state)
+                booking = self._bounded_tool_call(
+                    state, lambda: staged_simulator.book_flight(hold["hold_id"]),
+                    restore_shared={"holds": (hold_id,), "bookings": (booking_id,)})
+                self._check_deadline(state)
                 validate_booking_evidence(booking, hold)
                 if (booking["flight"]["flight_number"] != selected
                         or dict(booking["flight"]) != dict(requested_flight)
                         or booking["passenger"] != state.passenger.strip()):
                     raise ValueError("booking does not match the selected current-search flight and passenger")
-                if self.simulator.bookings.get(booking["booking_id"]) != booking:
+                if staged_simulator.bookings.get(booking["booking_id"]) != booking:
                     raise ValueError("returned booking does not exactly match simulator storage")
-                if self.simulator.holds.get(hold["hold_id"]) != hold:
+                if staged_simulator.holds.get(hold["hold_id"]) != hold:
                     raise ValueError("persisted hold changed during booking")
                 booking_outcome = self._booking_outcome(booking, hold)
+                # The outcome constructor may run injected callbacks in tests or
+                # application hooks. Recheck before either persistence boundary.
+                self._check_deadline(state)
+                with self._store_revision_lock:
+                    self.simulator.holds[hold_id] = deepcopy(hold)
+                    self.simulator.bookings[booking_id] = deepcopy(booking)
+                    for key in transaction_keys:
+                        self._store_revisions[key] = self._store_revisions.get(key, 0) + 1
+                    # These revision values identify the writes made by this
+                    # transaction. Rollback may undo them only while nobody
+                    # has subsequently replaced the same store entries.
+                    owned_revisions = {
+                        key: self._store_revisions[key] for key in transaction_keys
+                    }
+                self._check_deadline(state)
+                state.hold_id, state.booking = hold["hold_id"], booking
+                self._check_deadline(state)
             except Exception as exc:
-                self.simulator.holds.clear()
-                self.simulator.holds.update(simulator_holds)
-                self.simulator.bookings.clear()
-                self.simulator.bookings.update(simulator_bookings)
+                hold_ids = {hold_id}
+                booking_ids = {booking_id}
+                if isinstance(locals().get("hold"), Mapping) and isinstance(hold.get("hold_id"), str):
+                    hold_ids.add(hold["hold_id"])
+                if isinstance(locals().get("booking"), Mapping) and isinstance(booking.get("booking_id"), str):
+                    booking_ids.add(booking["booking_id"])
+                for key in hold_ids:
+                    revision_key = ("holds", key)
+                    with self._store_revision_lock:
+                        expected_revision = (owned_revisions.get(
+                            revision_key, transaction_revisions.get(revision_key, 0))
+                            if owned_revisions is not None
+                            else transaction_revisions.get(revision_key, 0))
+                        unchanged = (self._store_revisions.get(revision_key, 0)
+                                     == expected_revision)
+                        if unchanged:
+                            original = simulator_holds.get(key)
+                            if self.simulator.holds.get(key) != original:
+                                if key in simulator_holds:
+                                    self.simulator.holds[key] = deepcopy(original)
+                                else:
+                                    self.simulator.holds.pop(key, None)
+                                self._store_revisions[revision_key] = self._store_revisions.get(revision_key, 0) + 1
+                for key in booking_ids:
+                    revision_key = ("bookings", key)
+                    with self._store_revision_lock:
+                        expected_revision = (owned_revisions.get(
+                            revision_key, transaction_revisions.get(revision_key, 0))
+                            if owned_revisions is not None
+                            else transaction_revisions.get(revision_key, 0))
+                        unchanged = (self._store_revisions.get(revision_key, 0)
+                                     == expected_revision)
+                        if unchanged:
+                            original = simulator_bookings.get(key)
+                            if self.simulator.bookings.get(key) != original:
+                                if key in simulator_bookings:
+                                    self.simulator.bookings[key] = deepcopy(original)
+                                else:
+                                    self.simulator.bookings.pop(key, None)
+                                self._store_revisions[revision_key] = self._store_revisions.get(revision_key, 0) + 1
                 (state.selected_flight_id, state.passenger, state.hold_id, state.booking) = original_session
+                if isinstance(exc, (_BudgetExceeded, _CapacityExceeded)): raise
                 return make_turn_outcome(intent=Intent.REFUSE, deterministic_response="I couldn't safely complete that simulated booking. Please try again.", search_results=latest, fallback_reason="tool_error:" + type(exc).__name__)
-            state.hold_id, state.booking = hold["hold_id"], booking
             return booking_outcome
         if state.criteria.origin and state.criteria.destination and not state.last_search:
             try:
-                search = self._validated_search(self.simulator.search_flights(state.criteria), state.criteria)
+                self._consume_tool(state)
+                search = self._validated_search(self._bounded_tool_call(
+                    state, lambda: self.simulator.search_flights(state.criteria)), state.criteria)
+                self._check_deadline(state)
             except Exception as exc:
+                if isinstance(exc, (_BudgetExceeded, _CapacityExceeded)): raise
                 return make_turn_outcome(intent=Intent.REFUSE,
                     deterministic_response="I couldn't safely complete that simulator search. Please try again.",
                     fallback_reason="tool_error:" + type(exc).__name__)
@@ -493,6 +784,9 @@ class ConversationController:
     def _criteria_from_text(self, text: str) -> SearchCriteria:
         # Airport codes in the corpus are uppercase; do not uppercase the whole
         # message first, or a name such as "Amy" becomes a false airport code.
+        passenger = _parse_controller_passenger(text)
+        if passenger.found and passenger.name:
+            text = re.sub(re.escape(passenger.name), " ", text, flags=re.I)
         airports = re.findall(r"\b[A-Z]{3}\b", text)
         origin, destination = (airports + [None, None])[:2]
         max_price = None

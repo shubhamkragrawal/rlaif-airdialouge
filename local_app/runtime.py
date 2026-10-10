@@ -10,6 +10,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -87,8 +89,12 @@ class TransformersAdapter(ModelAdapter):
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
         self.model.to(self.device).eval()
 
-    def generate(self, messages, retrieved_flights):
+    def generate(self, messages, retrieved_flights, *, max_new_tokens: int | None = None,
+                 deadline_seconds: float | None = None, cancel_event=None):
         import torch
+        import time
+        from transformers import StoppingCriteria, StoppingCriteriaList
+        started = time.monotonic()
         if not isinstance(messages, list) or not all(
             isinstance(message, dict)
             and message.get("role") in {"system", "user", "assistant"}
@@ -114,19 +120,40 @@ class TransformersAdapter(ModelAdapter):
             grounded_messages, tokenize=False, add_generation_prompt=True
         )
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        token_limit = self.config.max_new_tokens if max_new_tokens is None else min(
+            self.config.max_new_tokens, max(0, int(max_new_tokens)))
+        if token_limit <= 0 or deadline_seconds is not None and deadline_seconds <= 0:
+            raise RuntimeUnavailable("generation budget exhausted")
         generation_kwargs = {
-            "max_new_tokens": self.config.max_new_tokens,
+            "max_new_tokens": token_limit,
             "do_sample": self.config.temperature > 0,
         }
         if self.config.temperature > 0:
             generation_kwargs["temperature"] = self.config.temperature
         else:
             generation_kwargs.update({"temperature": None, "top_p": None, "top_k": None})
+        if deadline_seconds is not None and time.monotonic() - started >= deadline_seconds:
+            raise RuntimeUnavailable("session_time_exceeded")
+        stop_at = None if deadline_seconds is None else started + deadline_seconds
+
+        class _StopOnDeadlineOrCancellation(StoppingCriteria):
+            def __call__(self, input_ids, scores, **kwargs):
+                cancelled = cancel_event is not None and cancel_event.is_set()
+                expired = stop_at is not None and time.monotonic() >= stop_at
+                return torch.full((input_ids.shape[0],), cancelled or expired,
+                                  dtype=torch.bool, device=input_ids.device)
+
+        generation_kwargs["stopping_criteria"] = StoppingCriteriaList([_StopOnDeadlineOrCancellation()])
         with torch.no_grad():
             output = self.model.generate(
                 **inputs,
                 **generation_kwargs,
             )
+        # MPS generation is synchronous and cannot be safely interrupted midway.
+        # A late result is discarded by raising before it can reach the controller.
+        if ((cancel_event is not None and cancel_event.is_set())
+                or deadline_seconds is not None and time.monotonic() - started >= deadline_seconds):
+            raise RuntimeUnavailable("session_time_exceeded")
         generated = output[0][inputs["input_ids"].shape[1]:]
         self.last_usage = {
             "input_tokens": int(inputs["input_ids"].shape[1]),
@@ -158,25 +185,57 @@ class RuntimeManager:
         self.factory = factory
         self._name: str | None = None
         self._runtime: ModelAdapter | None = None
+        self._lock = threading.RLock()
+        self._request_id = 0
 
     def configured(self, name: str) -> bool:
         path = (self.config.adapter_paths or {}).get(name)
         return bool(path and (Path(path) / "adapter_config.json").is_file())
 
-    def get(self, name: str) -> ModelAdapter:
+    def get(self, name: str, *, cancel_event=None, deadline_seconds: float | None = None) -> ModelAdapter:
         if not self.configured(name):
             raise RuntimeUnavailable(f"adapter '{name}' is not available locally")
-        if self._runtime is None or self._name != name:
-            self.release()
-            self._runtime = self.factory(name, self.config)
-            self._name = name
-        return self._runtime
+        started = time.monotonic()
+        with self._lock:
+            if ((cancel_event is not None and cancel_event.is_set()) or
+                    (deadline_seconds is not None and time.monotonic() - started >= deadline_seconds)):
+                raise RuntimeUnavailable("session_time_exceeded")
+            if self._runtime is not None and self._name == name:
+                return self._runtime
+            self._request_id += 1
+            ticket = self._request_id
+        candidate = self.factory(name, self.config)
+        rejected_reason = None
+        with self._lock:
+            expired = ((cancel_event is not None and cancel_event.is_set()) or
+                       (deadline_seconds is not None and time.monotonic() - started >= deadline_seconds))
+            if expired or ticket != self._request_id:
+                rejected_reason = "session_time_exceeded" if expired else "runtime_load_superseded"
+                old = None
+            else:
+                old = self._runtime
+                self._runtime, self._name = candidate, name
+        if rejected_reason is not None:
+            # Cleanup can import torch / release MPS cache. Keep that work out
+            # of the manager lock so other sessions can still inspect/load state.
+            self._dispose(candidate)
+            raise RuntimeUnavailable(rejected_reason)
+        self._dispose(old)
+        return candidate
 
     def release(self) -> None:
-        if self._runtime is None:
+        with self._lock:
+            self._request_id += 1
+            old, self._runtime = self._runtime, None
+            self._name = None
+        self._dispose(old)
+
+    @staticmethod
+    def _dispose(runtime) -> None:
+        # Test/custom adapters have no Transformers-owned accelerator cache;
+        # avoid importing the heavyweight runtime just to discard a stub.
+        if runtime is None or not isinstance(runtime, TransformersAdapter):
             return
-        self._runtime = None
-        self._name = None
         try:
             import torch
             if torch.backends.mps.is_available():
