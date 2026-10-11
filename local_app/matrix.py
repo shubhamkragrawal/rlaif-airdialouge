@@ -29,6 +29,9 @@ from .outcomes import Intent, OUTCOME_SCHEMA, OUTCOME_SCHEMA_VERSION
 MATRIX_REPORT_VERSION = 1
 BASELINE_SCHEMA = "rlaif.local_app.matrix_baseline"
 BASELINE_VERSION = 1
+RELEASE_SCHEMA = "rlaif.local_app.matrix_release"
+RELEASE_VERSION = 1
+RELEASE_ROOT = Path(__file__).resolve().parents[1] / "artifacts" / "matrix" / "releases" / "v1"
 
 
 def _canonical_hash(value: Any) -> str:
@@ -148,7 +151,7 @@ def _turn_evidence(observed: Sequence[Mapping[str, Any]], scenarios: Sequence[An
                                   else (True if isinstance(fallback_reason, str)
                                         and re.search(r"repeated|duplicate|closing_loop",
                                                       fallback_reason, re.I)
-                                        else None)),
+                                        else False)),
             "fallback": fallback, "fallback_reason": fallback_reason,
             "input_tokens": tokens.get("input_tokens"),
             "output_tokens": tokens.get("output_tokens"),
@@ -279,7 +282,8 @@ def _adapter_artifact(manager: Any, adapter: str) -> dict[str, Any]:
 def run_matrix(
     *, mode: str = "controller_only", corpus_path: str | Path = DEFAULT_CORPUS,
     count: int = 50, start: int = 0, scenarios: Sequence[Any] | None = None,
-    runtime_manager: Any = None,
+    runtime_manager: Any = None, temperature: float | None = None,
+    max_new_tokens: int | None = None, adapters: Sequence[str] = ADAPTERS,
 ) -> dict[str, Any]:
     """Run all four arms over one immutable scenario list and shared settings."""
     if mode not in {"controller_only", "integrated"}:
@@ -288,6 +292,9 @@ def run_matrix(
         raise ValueError("integrated mode requires a local runtime manager")
     if mode == "controller_only" and runtime_manager is not None:
         raise ValueError("controller_only forbids model loading")
+    selected_adapters = tuple(adapters)
+    if not selected_adapters or any(adapter not in ADAPTERS for adapter in selected_adapters):
+        raise ValueError("adapters must be a non-empty subset of supported adapters")
     cohort = list(scenarios) if scenarios is not None else load_scenarios(
         corpus_path, count=count, start=start)
     cohort.sort(key=lambda item: item.scenario_id)
@@ -298,11 +305,15 @@ def run_matrix(
                        "expected_status": s.expected_status,
                        "expected_flight_ids": list(s.expected_flight_ids)} for s in cohort]
     corpus_hash = evaluation._sha256_path(Path(corpus_path))
+    if mode == "integrated":
+        temperature = (runtime_manager.config.temperature if temperature is None else temperature)
+        max_new_tokens = (runtime_manager.config.max_new_tokens if max_new_tokens is None
+                          else max_new_tokens)
     settings = ({"mode": "deterministic_controller"} if mode == "controller_only" else {
         "mode": "model", "base_model": runtime_manager.config.base_model,
         "revision": runtime_manager.config.revision,
-        "max_new_tokens": runtime_manager.config.max_new_tokens,
-        "temperature": runtime_manager.config.temperature,
+        "max_new_tokens": max_new_tokens,
+        "temperature": temperature,
     })
     cohort_id = "matrix-" + _canonical_hash({"scenarios": cohort_payload,
                                                "corpus_sha256": corpus_hash,
@@ -310,7 +321,7 @@ def run_matrix(
     controller_version = _controller_version()
     outcome_schema_sha256 = evaluation._sha256_path(Path(__file__).with_name("outcomes.py"))
     arms = {}
-    for adapter in ADAPTERS:
+    for adapter in selected_adapters:
         artifact = (_adapter_artifact(runtime_manager, adapter) if mode == "integrated"
                     else {})
         observed: list[dict[str, Any]] = []
@@ -413,7 +424,8 @@ def run_matrix(
                          "runtime_provenance": runtime_provenance},
                 hardware=({"device": runtime_provenance["device"],
                            "precision": runtime_provenance["precision"],
-                           "peak_memory_bytes": runtime_provenance["peak_memory_bytes"]}
+                           "peak_memory_bytes": runtime_provenance["peak_memory_bytes"],
+                           "peak_process_rss_mb": report["summary"].get("peak_process_rss_mb")}
                           if runtime_provenance is not None else {}),
                 generation_settings=settings,
             )
@@ -449,8 +461,9 @@ def run_matrix(
                 runtime_manager.release()
     if {tuple(arm["scenario_ids"]) for arm in arms.values()} != {tuple(ids)}:
         raise ValueError("matrix arms do not share an identical scenario cohort")
+    reference_adapter = ADAPTERS[0] if ADAPTERS[0] in arms else selected_adapters[0]
     reference = {row["scenario_id"]: row["normalized_outcome"]
-                 for row in arms[ADAPTERS[0]]["scenarios"]}
+                 for row in arms[reference_adapter]["scenarios"]}
     comparisons = {}
     for adapter, arm in arms.items():
         outcomes = {row["scenario_id"]: row["normalized_outcome"] for row in arm["scenarios"]}
@@ -553,12 +566,129 @@ def compare_baseline(report: Mapping[str, Any], baseline_path: str | Path) -> di
     return result
 
 
+def _release_identity(*, adapters: Mapping[str, Mapping[str, Any]], corpus_sha256: str,
+                      controller_sha256: str, base_model: str, base_model_revision: str,
+                      generation_settings: Mapping[str, Any]) -> dict[str, Any]:
+    adapter_hashes = {name: (arm.get("runtime_provenance") or {}).get("adapter_sha256")
+                      for name, arm in adapters.items()}
+    return {"adapter_sha256": adapter_hashes, "base_model": base_model,
+            "base_model_revision": base_model_revision, "corpus_sha256": corpus_sha256,
+            "controller_sha256": controller_sha256,
+            "generation_settings": dict(generation_settings)}
+
+
+def run_release(*, runtime_manager: Any, corpus_path: str | Path = DEFAULT_CORPUS,
+                output_dir: str | Path = RELEASE_ROOT, start: int = 0, count: int = 50,
+                temperature: float = 0.0, max_new_tokens: int = 160,
+                arm_runner: Any = run_matrix) -> dict[str, Any]:
+    """Run and checkpoint an integrated deterministic release one adapter at a time."""
+    if (start, count, temperature, max_new_tokens) != (0, 50, 0.0, 160):
+        raise ValueError("deterministic release requires temperature=0, max_new_tokens=160, start=0, count=50")
+    if runtime_manager is None:
+        raise ValueError("integrated release requires a local runtime manager")
+    out = Path(output_dir)
+    checkpoints = out / "checkpoints"
+    out.mkdir(parents=True, exist_ok=True)
+    checkpoints.mkdir(parents=True, exist_ok=True)
+    expected_scenario_ids = [scenario.scenario_id for scenario in
+                             load_scenarios(corpus_path, count=count, start=start)]
+    corpus_hash = evaluation._sha256_path(Path(corpus_path))
+    controller_hash = _controller_version()
+    base_model = runtime_manager.config.base_model
+    base_revision = runtime_manager.config.revision
+    settings = {"mode": "model", "base_model": base_model,
+                "revision": base_revision, "temperature": 0.0,
+                "max_new_tokens": 160, "start": 0, "count": 50}
+    arms: dict[str, dict[str, Any]] = {}
+    for adapter in ADAPTERS:
+        checkpoint = checkpoints / f"{adapter}.json"
+        if checkpoint.exists():
+            arm = json.loads(checkpoint.read_text(encoding="utf-8"))
+            supplied_checkpoint_hash = arm.pop("checkpoint_sha256", None)
+            if supplied_checkpoint_hash != _canonical_hash(arm):
+                raise ValueError(f"release checkpoint hash mismatch for {adapter}")
+            if arm.get("adapter") != adapter:
+                raise ValueError(f"checkpoint adapter mismatch for {adapter}")
+            expected_adapter_hash = _adapter_artifact(runtime_manager, adapter).get("sha256")
+            cached_arm = arm.get("arm")
+            provenance = cached_arm.get("runtime_provenance") or {} if isinstance(cached_arm, Mapping) else {}
+            participation = cached_arm.get("model_participation") if isinstance(cached_arm, Mapping) else None
+            if (arm.get("corpus_sha256") != corpus_hash
+                    or arm.get("controller_sha256") != controller_hash
+                    or arm.get("base_model") != base_model
+                    or arm.get("base_model_revision") != base_revision
+                    or arm.get("generation_settings") != settings
+                    or provenance.get("adapter_sha256") != expected_adapter_hash
+                    or provenance.get("base_model") != base_model
+                    or provenance.get("base_model_revision") != base_revision
+                    or provenance.get("complete") is not True
+                    or not isinstance(cached_arm, Mapping)
+                    or cached_arm.get("layer") != "integrated"
+                    or cached_arm.get("status") != "complete"
+                    or cached_arm.get("scenario_ids") != expected_scenario_ids
+                    or (cached_arm.get("metrics") or {}).get("scenario_count") != count
+                    or not isinstance(participation, Mapping)
+                    or participation.get("turns", 0) <= 0):
+                raise ValueError(f"release checkpoint identity mismatch for {adapter}")
+            arms[adapter] = arm["arm"]
+            continue
+        report = arm_runner(mode="integrated", corpus_path=corpus_path, count=count,
+                            start=start, runtime_manager=runtime_manager,
+                            temperature=temperature, max_new_tokens=max_new_tokens,
+                            adapters=(adapter,))
+        arm = report["adapters"][adapter]
+        provenance = arm.get("runtime_provenance") or {}
+        if arm.get("layer") != "integrated" or arm.get("status") != "complete":
+            raise ValueError(f"adapter {adapter} did not pass integrated release gates")
+        if (not provenance.get("complete") or arm.get("model_participation", {}).get("turns", 0) <= 0
+                or provenance.get("base_model") != base_model
+                or provenance.get("base_model_revision") != base_revision
+                or arm.get("scenario_ids") != expected_scenario_ids
+                or (arm.get("metrics") or {}).get("scenario_count") != count):
+            raise ValueError(f"adapter {adapter} has incomplete release provenance")
+        identity = {"adapter": adapter, "arm": arm, "corpus_sha256": corpus_hash,
+                    "controller_sha256": controller_hash, "base_model": base_model,
+                    "base_model_revision": base_revision, "generation_settings": settings}
+        identity["checkpoint_sha256"] = _canonical_hash(identity)
+        write_json_atomic(identity, checkpoint)
+        arms[adapter] = arm
+    if set(arms) != set(ADAPTERS):
+        raise ValueError("release requires complete results for all four adapters")
+    cohort_ids = {arm.get("cohort_id") for arm in arms.values()}
+    scenario_sets = {tuple(arm.get("scenario_ids") or ()) for arm in arms.values()}
+    if (len(cohort_ids) != 1 or None in cohort_ids or len(scenario_sets) != 1
+            or list(next(iter(scenario_sets))) != expected_scenario_ids):
+        raise ValueError("release arms do not share one non-empty cohort")
+    scenario_ids = list(next(iter(scenario_sets)))
+    release = {"schema": RELEASE_SCHEMA, "release_version": RELEASE_VERSION,
+               "mode": "integrated", "layer": "integrated",
+               "cohort_id": next(iter(cohort_ids)),
+               "cohort": {"scenario_ids": scenario_ids,
+                           "scenario_count": len(scenario_ids), "settings": settings},
+               "generation_settings": settings,
+               "identity": _release_identity(adapters=arms, corpus_sha256=corpus_hash,
+                   controller_sha256=controller_hash, base_model=base_model,
+                   base_model_revision=base_revision, generation_settings=settings),
+               "adapters": arms}
+    release["sha256"] = _canonical_hash(release)
+    write_json_atomic(release, out / "release-v1.json")
+    write_json_atomic({"schema": RELEASE_SCHEMA, "release_version": RELEASE_VERSION,
+                       "sha256": release["sha256"], "identity": release["identity"]},
+                      out / "manifest-v1.json")
+    return release
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("controller_only", "integrated"), default="controller_only")
     parser.add_argument("--corpus", type=Path, default=DEFAULT_CORPUS)
     parser.add_argument("--count", type=int, default=50)
     parser.add_argument("--start", type=int, default=0)
+    parser.add_argument("--temperature", type=float, default=0.0)
+    parser.add_argument("--max-new-tokens", type=int, default=160)
+    parser.add_argument("--release", action="store_true",
+                        help="run resumable deterministic integrated release")
+    parser.add_argument("--release-dir", type=Path, default=RELEASE_ROOT)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--baseline", type=Path)
     parser.add_argument("--freeze-baseline", type=Path)
@@ -566,10 +696,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     manager = None
     if args.mode == "integrated":
         from .runtime import RuntimeConfig, RuntimeManager
-        manager = RuntimeManager(RuntimeConfig.local_defaults())
+        config = RuntimeConfig.local_defaults()
+        from dataclasses import replace
+        config = replace(config, temperature=args.temperature,
+                         max_new_tokens=args.max_new_tokens)
+        manager = RuntimeManager(config)
     try:
+        if args.release:
+            if args.mode != "integrated":
+                parser.error("--release requires --mode integrated")
+            report = run_release(runtime_manager=manager, corpus_path=args.corpus,
+                                 output_dir=args.release_dir, start=args.start,
+                                 count=args.count, temperature=args.temperature,
+                                 max_new_tokens=args.max_new_tokens)
+            print(json.dumps({"status": "written", "mode": "integrated",
+                              "output": str(args.release_dir / "release-v1.json")}, sort_keys=True))
+            return 0
         report = run_matrix(mode=args.mode, corpus_path=args.corpus, count=args.count,
-                            start=args.start, runtime_manager=manager)
+                            start=args.start, runtime_manager=manager,
+                            temperature=args.temperature, max_new_tokens=args.max_new_tokens)
         if args.freeze_baseline:
             if args.mode != "controller_only":
                 parser.error("integrated results cannot be frozen until runtime metadata/contracts are integrated")

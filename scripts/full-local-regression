@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
+project_dir="$(cd -- "$script_dir/.." && pwd)"
+python_bin="${PYTHON:-$project_dir/.venv/bin/python}"
+if [[ ! -x "$python_bin" && -z "${PYTHON:-}" ]]; then
+  python_bin="python3"
+fi
+node_bin="${RLAIF_NODE:-node}"
+
+if ! command -v "$python_bin" >/dev/null 2>&1; then
+  printf 'ERROR: Python executable not found: %s\n' "$python_bin" >&2
+  exit 127
+fi
+python_minor="$("$python_bin" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+python_major="${python_minor%%.*}"
+python_rest="${python_minor#*.}"
+if [[ "$python_major" -lt 3 || ( "$python_major" -eq 3 && "$python_rest" -lt 11 ) ]]; then
+  printf 'ERROR: Python 3.11+ is required (found %s). Set PYTHON to a compatible executable.\n' "$python_minor" >&2
+  exit 1
+fi
+if ! command -v "$node_bin" >/dev/null 2>&1; then
+  printf 'ERROR: Node.js 18+ is required for browser catalog/DOM regressions. Install Node.js or set RLAIF_NODE to its executable.\n' >&2
+  exit 127
+fi
+node_major="$("$node_bin" -p 'Number(process.versions.node.split(".")[0])')"
+if [[ "$node_major" -lt 18 ]]; then
+  printf 'ERROR: Node.js 18+ is required for browser catalog/DOM regressions (found %s).\n' "$node_major" >&2
+  exit 1
+fi
+
+cd "$project_dir"
+printf 'Running local_app tests (catalog and behavioral DOM included)...\n'
+local_status=0
+"$python_bin" -m unittest discover -s local_app/tests -t . || local_status=$?
+
+cd "$project_dir/rebuild"
+printf 'Running rebuild tests from %s...\n' "$PWD"
+rebuild_status=0
+"$python_bin" -m unittest discover -s rlaif/tests -t . || rebuild_status=$?
+
+if [[ "$local_status" -ne 0 || "$rebuild_status" -ne 0 ]]; then
+  printf 'Regression failure: local_app=%s rebuild=%s\n' "$local_status" "$rebuild_status" >&2
+  exit 1
+fi

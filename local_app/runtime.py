@@ -81,6 +81,8 @@ class TransformersAdapter(ModelAdapter):
         self.config = config
         dtype = torch.float16 if torch.backends.mps.is_available() else torch.float32
         kwargs = {"revision": config.revision} if config.revision else {}
+        # Starting model mode must never trigger an implicit model download.
+        kwargs["local_files_only"] = True
         tokenizer_source = (
             adapter_path
             if (Path(adapter_path) / "tokenizer_config.json").is_file()

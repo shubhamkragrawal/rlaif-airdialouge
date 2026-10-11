@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rlaif-flight-local"
+version = "0.1.0"
+description = "Dependency-light deterministic local flight conversation simulator"
+readme = "LOCAL_CONVERSATION_SYSTEM_SPEC.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.optional-dependencies]
+model = [
+  "torch==2.5.1",
+  "transformers==4.46.3",
+  "peft==0.13.2",
+  "accelerate==1.1.1",
+  "numpy==1.26.4",
+  "safetensors==0.4.5",
+  "sentencepiece==0.2.0",
+]
+
+[project.scripts]
+rlaif-local = "local_app.cli:main"
+rlaif-server = "local_app.server:main"
+rlaif-evaluate = "local_app.evaluation:main"
+
+[tool.setuptools]
+packages = ["local_app", "local_app.data"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+local_app = ["data/*.jsonl", "data/*.md"]

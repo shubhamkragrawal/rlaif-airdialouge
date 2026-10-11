@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rlaif.local_app.release_gate.v1",
+  "title": "RLAIF read-only release gate report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "release_version", "created_at", "status", "evidence_refs", "integrated_matrix_sha256", "adapters", "scenario_count", "staging_exclusions", "failures"],
+  "properties": {
+    "schema": {"const": "rlaif.local_app.release_gate"},
+    "release_version": {"const": 1},
+    "created_at": {"type": "string", "format": "date-time"},
+    "status": {"enum": ["pass", "fail"]},
+    "evidence_refs": {"type": "object", "additionalProperties": {"$ref": "#/$defs/evidenceRef"}},
+    "integrated_matrix_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "adapters": {"type": "array", "items": {"enum": ["sft", "dpo", "ppo_checkpoint_19", "ppo_adaptive_50"]}},
+    "scenario_count": {"type": ["integer", "null"], "minimum": 1},
+    "staging_exclusions": {"type": "object", "additionalProperties": false, "required": ["status", "excluded_paths"], "properties": {"status": {"enum": ["pass", "fail"]}, "excluded_paths": {"type": "array", "items": {"type": "string"}}}},
+    "failures": {"type": "array", "items": {"type": "string"}}
+  },
+  "$defs": {"evidenceRef": {"type": "object", "additionalProperties": false, "required": ["path", "sha256"], "properties": {"path": {"type": "string"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}}
+}

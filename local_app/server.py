@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 
-from .api import SessionAPI, make_server
+from .api import SessionAPI, make_server, normalize_loopback_host
 from .audit import AuditLog
 from .controller import ConversationController
 
@@ -38,6 +38,10 @@ def main(argv=None):
     parser.add_argument("--model", action="store_true",
                         help="lazily load the selected local Qwen/PEFT adapter")
     args = parser.parse_args(argv)
+    try:
+        host = normalize_loopback_host(args.host)
+    except ValueError as exc:
+        parser.error(str(exc))
     manager = None
     if args.model:
         from .runtime import RuntimeManager
@@ -45,10 +49,11 @@ def main(argv=None):
     controller = ConversationController(
         audit=AuditLog(), model_loader=manager.get if manager else None
     )
-    server = make_server(args.host, args.port, SessionAPI(
+    server = make_server(host, args.port, SessionAPI(
         controller, runtime_status_provider=_runtime_status_provider(manager) if manager else None
     ))
-    print(f"RLAIF local API listening on http://{args.host}:{args.port}")
+    display_host = f"[{host}]" if ":" in host else host
+    print(f"RLAIF local API listening on http://{display_host}:{args.port}")
     try:
         server.serve_forever()
     except KeyboardInterrupt:

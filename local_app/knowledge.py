@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from importlib.resources import files
 from typing import Any
 
 
-DEFAULT_CORPUS = Path(__file__).resolve().parents[1] / "airdialogue_sampled_5k.jsonl"
+DEFAULT_CORPUS = Path(str(files("local_app").joinpath("data/held_out_50.jsonl")))
 
 
 class FlightKnowledgeBase:

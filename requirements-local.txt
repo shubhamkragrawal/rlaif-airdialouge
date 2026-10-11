@@ -1,4 +1,4 @@
-# Local inference/runtime dependencies. Install only into RLAIF/.venv.
+# Optional model runtime pins; the default package needs no third-party runtime deps.
 torch==2.5.1
 transformers==4.46.3
 peft==0.13.2

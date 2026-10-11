@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import socket
 import threading
 from collections.abc import Mapping
 from dataclasses import fields, is_dataclass
@@ -103,6 +105,7 @@ def _json_safe(value: Any) -> Any:
 
 
 def make_server(host: str = "127.0.0.1", port: int = 8000, api: SessionAPI | None = None):
+    host = normalize_loopback_host(host)
     api = api or SessionAPI()
 
     class Handler(BaseHTTPRequestHandler):
@@ -257,10 +260,31 @@ def make_server(host: str = "127.0.0.1", port: int = 8000, api: SessionAPI | Non
         def log_message(self, *_args):
             return
 
-    server = ThreadingHTTPServer((host, port), Handler)
+    server_type = ThreadingHTTPServer
+    if ":" in host:
+        class IPv6ThreadingHTTPServer(ThreadingHTTPServer):
+            address_family = socket.AF_INET6
+        server_type = IPv6ThreadingHTTPServer
+    server = server_type((host, port), Handler)
     server.daemon_threads = True
     server.api = api
     return server
+
+
+def normalize_loopback_host(host: str) -> str:
+    """Accept only the three documented loopback spellings."""
+    if not isinstance(host, str):
+        raise ValueError("bind address must be 127.0.0.1, localhost, or ::1")
+    normalized = host.strip().lower()
+    if normalized == "localhost":
+        return "127.0.0.1"
+    try:
+        address = ipaddress.ip_address(normalized)
+    except ValueError as exc:
+        raise ValueError("bind address must be 127.0.0.1, localhost, or ::1") from exc
+    if normalized not in {"127.0.0.1", "::1"} or not address.is_loopback:
+        raise ValueError("bind address must be 127.0.0.1, localhost, or ::1")
+    return normalized
 
 
 class RequestError(Exception):

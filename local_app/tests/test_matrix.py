@@ -9,7 +9,7 @@ from unittest.mock import patch
 from local_app.controller import ADAPTERS
 from local_app.evaluation import EvaluationScenario
 from local_app.matrix import (BASELINE_SCHEMA, compare_baseline, freeze_baseline,
-                              run_matrix, _turn_evidence)
+                              run_matrix, run_release, _turn_evidence)
 from local_app.evaluation_metrics import aggregate_evaluation_metrics
 from local_app.observability import canonical_json
 
@@ -149,8 +149,8 @@ class MatrixTests(unittest.TestCase):
         rows, _ = _turn_evidence(
             observed, [scenario], run_id="r", adapter="sft", controller_version="v",
             generation_settings={}, adapter_metadata={}, scenario_rows={0: {}})
-        self.assertEqual([row["repetitive_output"] for row in rows], [None, None])
-        self.assertIsNone(aggregate_evaluation_metrics([], rows)["repetition_rate"])
+        self.assertEqual([row["repetitive_output"] for row in rows], [False, False])
+        self.assertEqual(aggregate_evaluation_metrics([], rows)["repetition_rate"], 0.0)
 
     def test_show_flights_is_search_and_records_no_results_evidence(self):
         scenario = EvaluationScenario(0, ("Show flights from nowhere",), "no_flight")
@@ -206,12 +206,79 @@ class MatrixTests(unittest.TestCase):
                 self.assertGreater(arm["model_participation"]["turns"], 0)
                 self.assertTrue(arm["runtime_provenance"]["complete"])
                 self.assertEqual(arm["runtime_status"]["lifecycle_status"], "ready")
-                self.assertEqual(arm["run_manifest"]["record"]["hardware"], {
-                    "device": "cpu", "peak_memory_bytes": 4096, "precision": "float32"})
+                hardware = arm["run_manifest"]["record"]["hardware"]
+                self.assertEqual(hardware["device"], "cpu")
+                self.assertEqual(hardware["peak_memory_bytes"], 4096)
+                self.assertEqual(hardware["precision"], "float32")
+                self.assertGreaterEqual(hardware["peak_process_rss_mb"], 0)
                 self.assertGreaterEqual(arm["metrics"]["scenario_count"], 1)
                 self.assertEqual(len(arm["turn_manifests"]), 1)
                 self.assertEqual(arm["fingerprints"]["runtime_provenance_sha256"],
                                  arm["runtime_provenance"]["sha256"])
+
+    def test_release_checkpoints_resume_and_assemble_in_temporary_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = {}
+            for adapter in ADAPTERS:
+                path = Path(directory) / f"adapter-{adapter}"
+                path.mkdir()
+                (path / "adapter_config.json").write_text("{}")
+                paths[adapter] = path
+            manager = _StubRuntimeManager(paths)
+            calls = []
+
+            def arm_runner(**kwargs):
+                adapter = kwargs["adapters"][0]
+                calls.append(adapter)
+                from local_app.evaluation import load_scenarios
+                scenario_ids = [scenario.scenario_id for scenario in load_scenarios(CORPUS)]
+                provenance = manager.provenance(adapter)
+                provenance.update({"complete": True, "sha256": "a" * 64,
+                                   "incomplete_fields": []})
+                return {"adapters": {adapter: {
+                    "layer": "integrated", "status": "complete",
+                    "cohort_id": "release-cohort", "scenario_ids": scenario_ids,
+                    "metrics": {"scenario_count": 50},
+                    "runtime_provenance": provenance,
+                    "model_participation": {"turns": 1, "required": True},
+                }}}
+
+            first = run_release(runtime_manager=manager, corpus_path=CORPUS,
+                                output_dir=Path(directory) / "release", arm_runner=arm_runner)
+            self.assertEqual(tuple(first["adapters"]), ADAPTERS)
+            self.assertEqual(first["cohort"]["scenario_count"], 50)
+            self.assertEqual(len(calls), 4)
+            self.assertEqual(first["generation_settings"], {
+                "mode": "model", "base_model": manager.config.base_model,
+                "revision": manager.config.revision, "temperature": 0.0,
+                "max_new_tokens": 160, "start": 0, "count": 50})
+            self.assertTrue((Path(directory) / "release" / "manifest-v1.json").is_file())
+            resumed = run_release(runtime_manager=manager, corpus_path=CORPUS,
+                                  output_dir=Path(directory) / "release", arm_runner=arm_runner)
+            self.assertEqual(resumed["sha256"], first["sha256"])
+            self.assertEqual(len(calls), 4)
+
+    def test_release_rejects_non_deterministic_settings_and_stale_checkpoint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = {}
+            for adapter in ADAPTERS:
+                path = Path(directory) / adapter
+                path.mkdir()
+                (path / "adapter_config.json").write_text("{}")
+                paths[adapter] = path
+            manager = _StubRuntimeManager(paths)
+            with self.assertRaisesRegex(ValueError, "requires temperature=0"):
+                run_release(runtime_manager=manager, output_dir=Path(directory) / "bad",
+                            temperature=0.2)
+            release_dir = Path(directory) / "release"
+            checkpoint_dir = release_dir / "checkpoints"
+            checkpoint_dir.mkdir(parents=True)
+            (checkpoint_dir / f"{ADAPTERS[0]}.json").write_text(json.dumps({
+                "adapter": ADAPTERS[0], "arm": {"runtime_provenance": {
+                    "adapter_sha256": "f" * 64}}, "corpus_sha256": "wrong"}))
+            with self.assertRaisesRegex(ValueError, "checkpoint hash mismatch"):
+                run_release(runtime_manager=manager, corpus_path=CORPUS,
+                            output_dir=release_dir, arm_runner=lambda **_kwargs: {})
 
     def test_idempotent_repeated_confirmation_uses_current_turn_simulator_evidence(self):
         scenario = EvaluationScenario(

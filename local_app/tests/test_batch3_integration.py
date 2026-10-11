@@ -355,7 +355,7 @@ class BatchThreeIntegrationTests(unittest.TestCase):
         self.assertEqual(state.last_search.flights, ())
 
     def test_same_airport_booking_matrix_cases_remain_search_and_selection_validated(self):
-        scenarios = {item.scenario_id: item for item in load_scenarios(count=54, start=0)}
+        scenarios = {item.scenario_id: item for item in load_scenarios(count=50, start=0)}
         for scenario_id in (44, 53):
             with self.subTest(scenario_id=scenario_id):
                 scenario = scenarios[scenario_id]
