@@ -7,11 +7,14 @@ controller, tools, or guardrails.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+import gc
 import json
 import os
+import re
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +90,9 @@ class TransformersAdapter(ModelAdapter):
         base = AutoModelForCausalLM.from_pretrained(config.base_model, torch_dtype=dtype, **kwargs)
         self.model = PeftModel.from_pretrained(base, adapter_path)
         self.device = "mps" if torch.backends.mps.is_available() else "cpu"
+        self.dtype = str(dtype).replace("torch.", "")
         self.model.to(self.device).eval()
+        self._peak_memory_bytes = 0
 
     def generate(self, messages, retrieved_flights, *, max_new_tokens: int | None = None,
                  deadline_seconds: float | None = None, cancel_event=None):
@@ -149,6 +154,7 @@ class TransformersAdapter(ModelAdapter):
                 **inputs,
                 **generation_kwargs,
             )
+        self._record_peak_memory(torch)
         # MPS generation is synchronous and cannot be safely interrupted midway.
         # A late result is discarded by raising before it can reach the controller.
         if ((cancel_event is not None and cancel_event.is_set())
@@ -170,11 +176,24 @@ class TransformersAdapter(ModelAdapter):
         return {
             "adapter": self.name,
             "base_model": self.config.base_model,
-            "revision": self.config.revision,
-            "adapter_path": str(adapter_path),
+            "base_model_revision": self.config.revision,
+            "adapter_config": raw,
+            "adapter_sha256": _artifact_hash(adapter_path),
             "device": self.device,
+            "precision": self.dtype,
+            "generation_settings": _generation_settings(self.config),
+            "peak_memory_bytes": self._peak_memory_bytes,
             "peft_type": raw.get("peft_type"),
         }
+
+    def _record_peak_memory(self, torch) -> None:
+        try:
+            if self.device == "mps":
+                self._peak_memory_bytes = max(self._peak_memory_bytes, int(torch.mps.current_allocated_memory()))
+            elif str(self.device).startswith("cuda"):
+                self._peak_memory_bytes = max(self._peak_memory_bytes, int(torch.cuda.max_memory_allocated(self.device)))
+        except (AttributeError, RuntimeError):
+            pass
 
 
 class RuntimeManager:
@@ -186,13 +205,109 @@ class RuntimeManager:
         self._name: str | None = None
         self._runtime: ModelAdapter | None = None
         self._lock = threading.RLock()
+        self._load_lock = threading.Lock()
         self._request_id = 0
+        self._loading_name: str | None = None
+        self._errors: dict[str, str] = {}
 
     def configured(self, name: str) -> bool:
         path = (self.config.adapter_paths or {}).get(name)
         return bool(path and (Path(path) / "adapter_config.json").is_file())
 
+    def adapter_status(self, name: str) -> dict[str, Any]:
+        """Return a stable, secret-free snapshot of one adapter's lifecycle."""
+        with self._lock:
+            if self._runtime is not None and self._name == name:
+                state = "ready"
+            elif self._loading_name == name:
+                state = "loading"
+            else:
+                path = (self.config.adapter_paths or {}).get(name)
+                if not path:
+                    state = "unavailable"
+                elif not Path(path).exists():
+                    state = "configured"
+                else:
+                    config_file = Path(path) / "adapter_config.json"
+                    try:
+                        parsed = json.loads(config_file.read_text())
+                        if not isinstance(parsed, dict):
+                            raise ValueError
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        state = "incompatible"
+                    else:
+                        state = "available"
+            error = self._errors.get(name)
+        result = _status_envelope(name, state)
+        if error:
+            result["provenance_status"] = "error"
+        return result
+
+    def status(self, name: str) -> dict[str, Any]:
+        """Alias for adapter_status, suitable for UI integrations."""
+        return self.adapter_status(name)
+
+    def provenance(self, name: str | None = None) -> dict[str, Any]:
+        """Return runtime provenance without local paths or credential material."""
+        with self._lock:
+            selected = name if name is not None else self._name
+            runtime = self._runtime if selected is not None and selected == self._name else None
+        if selected is None:
+            return _status_envelope(None, "unavailable")
+        envelope = self.adapter_status(selected)
+        result: dict[str, Any] = dict(envelope)
+        with self._lock:
+            last_error = self._errors.get(selected)
+        if last_error:
+            result["error"] = last_error
+        if runtime is not None:
+            metadata = getattr(runtime, "metadata", None)
+            if callable(metadata):
+                try:
+                    metadata_result = metadata()
+                    metadata_result = dict(metadata_result) if isinstance(metadata_result, dict) else {}
+                    result.update(metadata_result)
+                    result["adapter"] = selected
+                    result.setdefault("base_model", self.config.base_model)
+                    result.setdefault("base_model_revision", self.config.revision)
+                    result.setdefault("generation_settings", _generation_settings(self.config))
+                    path = (self.config.adapter_paths or {}).get(selected)
+                    if path:
+                        result.setdefault("adapter_sha256", _artifact_hash(Path(path)))
+                        try:
+                            result.setdefault("adapter_config", json.loads(
+                                (Path(path) / "adapter_config.json").read_text()))
+                        except (OSError, ValueError, json.JSONDecodeError):
+                            pass
+                    result.update(envelope)
+                    result["adapter"] = selected
+                    return _safe_provenance(result)
+                except Exception as exc:
+                    result["provenance_status"] = "error"
+                    result["error"] = _safe_error(exc)
+                    return result
+        result.update({"base_model": self.config.base_model,
+                       "base_model_revision": self.config.revision,
+                       "generation_settings": _generation_settings(self.config)})
+        path = (self.config.adapter_paths or {}).get(selected)
+        if path and self.configured(selected):
+            try:
+                config = json.loads((Path(path) / "adapter_config.json").read_text())
+                result["adapter_config"] = config
+                result["adapter_sha256"] = _artifact_hash(Path(path))
+                result["provenance_status"] = "partial"
+            except (OSError, ValueError, json.JSONDecodeError) as exc:
+                result["provenance_status"] = "error"
+                result["error"] = _safe_error(exc)
+        result["adapter"] = selected
+        return _safe_provenance(result)
+
     def get(self, name: str, *, cancel_event=None, deadline_seconds: float | None = None) -> ModelAdapter:
+        if name not in ADAPTERS:
+            raise RuntimeUnavailable("unknown adapter")
+        path = (self.config.adapter_paths or {}).get(name)
+        if not path:
+            raise RuntimeUnavailable(f"adapter '{name}' is not configured")
         if not self.configured(name):
             raise RuntimeUnavailable(f"adapter '{name}' is not available locally")
         started = time.monotonic()
@@ -204,41 +319,140 @@ class RuntimeManager:
                 return self._runtime
             self._request_id += 1
             ticket = self._request_id
-        candidate = self.factory(name, self.config)
+            old, self._runtime, self._name = self._runtime, None, None
+            self._loading_name = name
+            self._errors.pop(name, None)
+        self._dispose(old)
+        candidate = None
+        try:
+            with self._load_lock:
+                with self._lock:
+                    if ticket != self._request_id:
+                        raise RuntimeUnavailable("runtime_load_superseded")
+                self._check_budget(started, cancel_event, deadline_seconds)
+                candidate = self.factory(name, self.config)
+        except Exception as exc:
+            with self._lock:
+                if ticket == self._request_id:
+                    self._loading_name = None
+                    self._errors[name] = _safe_error(exc)
+            if isinstance(exc, RuntimeUnavailable):
+                raise
+            raise RuntimeUnavailable(_safe_error(exc)) from exc
         rejected_reason = None
         with self._lock:
             expired = ((cancel_event is not None and cancel_event.is_set()) or
                        (deadline_seconds is not None and time.monotonic() - started >= deadline_seconds))
             if expired or ticket != self._request_id:
                 rejected_reason = "session_time_exceeded" if expired else "runtime_load_superseded"
-                old = None
             else:
-                old = self._runtime
                 self._runtime, self._name = candidate, name
+                self._loading_name = None
         if rejected_reason is not None:
             # Cleanup can import torch / release MPS cache. Keep that work out
             # of the manager lock so other sessions can still inspect/load state.
             self._dispose(candidate)
+            with self._lock:
+                if ticket == self._request_id:
+                    self._loading_name = None
             raise RuntimeUnavailable(rejected_reason)
-        self._dispose(old)
         return candidate
+
+    @staticmethod
+    def _check_budget(started, cancel_event, deadline_seconds):
+        if (cancel_event is not None and cancel_event.is_set()) or (
+                deadline_seconds is not None and time.monotonic() - started >= deadline_seconds):
+            raise RuntimeUnavailable("session_time_exceeded")
 
     def release(self) -> None:
         with self._lock:
             self._request_id += 1
             old, self._runtime = self._runtime, None
             self._name = None
+            self._loading_name = None
         self._dispose(old)
 
     @staticmethod
     def _dispose(runtime) -> None:
-        # Test/custom adapters have no Transformers-owned accelerator cache;
-        # avoid importing the heavyweight runtime just to discard a stub.
-        if runtime is None or not isinstance(runtime, TransformersAdapter):
+        # Keep cleanup independent of the manager lock and leave custom adapter
+        # objects alone; dropping the manager reference releases them normally.
+        if runtime is None:
             return
         try:
-            import torch
-            if torch.backends.mps.is_available():
-                torch.mps.empty_cache()
-        except ImportError:
-            pass
+            if isinstance(runtime, TransformersAdapter):
+                import torch
+                if torch.backends.mps.is_available():
+                    torch.mps.empty_cache()
+                elif torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            gc.collect()
+        except (ImportError, RuntimeError):
+            gc.collect()
+
+
+def _generation_settings(config: RuntimeConfig) -> dict[str, Any]:
+    return {"max_new_tokens": config.max_new_tokens, "temperature": config.temperature}
+
+
+def _status_envelope(adapter: str | None, lifecycle_status: str) -> dict[str, Any]:
+    available = lifecycle_status in {"available", "ready"}
+    if lifecycle_status in {"available", "ready", "loading"}:
+        mode = "local_model"
+    else:
+        mode = "deterministic_fallback"
+    provenance_status = {
+        "ready": "complete",
+        "available": "partial",
+        "loading": "pending",
+        "incompatible": "error",
+        "configured": "unavailable",
+        "unavailable": "unavailable",
+    }[lifecycle_status]
+    return {
+        "adapter": adapter,
+        "lifecycle_status": lifecycle_status,
+        "mode": mode,
+        "available": available,
+        "provenance_status": provenance_status,
+    }
+
+
+def _artifact_hash(path: Path) -> str:
+    digest = hashlib.sha256()
+    files = [path] if path.is_file() else sorted(item for item in path.rglob("*") if item.is_file())
+    for item in files:
+        digest.update(item.relative_to(path).as_posix().encode() if path.is_dir() else item.name.encode())
+        with item.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _safe_error(exc: Exception) -> str:
+    # Arbitrary backend exceptions can embed credentials or request payloads.
+    # Preserve known runtime diagnostics; expose only the exception class otherwise.
+    message = "adapter operation failed"
+    if isinstance(exc, RuntimeUnavailable):
+        message = " ".join(str(exc).split())
+        message = re.sub(r"/(?:[^\s:'\"]+/)+[^\s:'\"]*", "[local path]", message)
+    return f"{type(exc).__name__}: {message[:240]}"
+
+
+def _safe_provenance(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    blocked = {"adapter_path", "path", "token", "secret", "password", "api_key", "apikey"}
+    def clean(item):
+        if isinstance(item, dict):
+            return {key: clean(value) for key, value in item.items()
+                    if key.casefold() not in blocked
+                    and not any(part in key.casefold() for part in ("secret", "password", "api_key"))
+                    and not key.casefold().endswith("_token")}
+        if isinstance(item, list):
+            return [clean(value) for value in item]
+        if isinstance(item, str):
+            item = re.sub(r"/(?:[^\s:'\"]+/)+[^\s:'\"]*", "[local path]", item)
+            return re.sub(r"(?i)(?:token|secret|password|api[_-]?key)\s*[:=]\s*\S+",
+                          "[redacted]", item)
+        return item
+    return clean(value)

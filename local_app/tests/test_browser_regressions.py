@@ -29,7 +29,7 @@ class BrowserRegressionTests(unittest.TestCase):
     def setUp(self):
         self.kb = FlightKnowledgeBase(scenario_id=0)
 
-    def run_browser_submit(self, payload):
+    def run_browser_submit(self, payload, change_adapter=False, lifecycle="unavailable"):
         """Execute the shipped client script with a behavioral DOM harness."""
         configured_node = os.environ.get("RLAIF_NODE")
         node = shutil.which(configured_node) if configured_node else shutil.which("node")
@@ -49,13 +49,13 @@ class BrowserRegressionTests(unittest.TestCase):
         response64 = base64.b64encode(result["text"].encode()).decode("ascii")
         harness = r"""
 const vm=require('node:vm');
-const [script64,payload64,response64]=process.argv.slice(1);
+const [script64,payload64,response64,changeAdapter,lifecycle]=process.argv.slice(1);
 const decode=s=>Buffer.from(s,'base64').toString('utf8');
 const payload=decode(payload64), responseText=decode(response64);
-const context={console,Buffer,TextEncoder,TextDecoder,Uint8Array,setTimeout:(fn)=>{fn();return 0},clearTimeout:()=>{}};
+const context={console,Buffer,TextEncoder,TextDecoder,Uint8Array,URL,setTimeout:(fn)=>{fn();return 0},clearTimeout:()=>{}};
 context.window=context; context.globalThis=context;
 class Node {
-  constructor(tag='node'){this.tagName=tag.toUpperCase();this.children=[];this.parentElement=null;this.attributes=[];this.listeners={};this._text='';this.value='';this.className='';this.scrollTop=0;this.id='';}
+  constructor(tag='node'){this.tagName=tag.toUpperCase();this.children=[];this.parentElement=null;this.attributes=[];this.listeners={};this._text='';this.value='';this.className='';this.scrollTop=0;this.id='';this.dataset={};}
   append(...nodes){for(const n of nodes){if(n.parentElement)n.parentElement.children=n.parentElement.children.filter(c=>c!==n);n.parentElement=this;this.children.push(n);}}
   appendChild(n){this.append(n);return n;}
   replaceChildren(...nodes){this.children=[];this._text='';this.append(...nodes);}
@@ -80,14 +80,17 @@ class Node {
   setAttribute(name,value){const old=this.attributes.find(a=>a.name===name);if(old)old.value=String(value);else this.attributes.push({name,value:String(value)});}
 }
 const ids={};
-for(const id of ['log','msg','adapter','reset','form']){ids[id]=new Node(id==='msg'?'input':'div');ids[id].id=id;}
+for(const id of ['log','msg','adapter','reset','form','runtime-status']){ids[id]=new Node(id==='msg'?'input':'div');ids[id].id=id;}
 ids.adapter.value='dpo';
 context.document={getElementById:id=>ids[id],createElement:tag=>new Node(tag),querySelectorAll:s=>Object.values(ids).flatMap(n=>n.querySelectorAll(s))};
-context.fetch=async url=>{
-  if(String(url)==='/sessions')return {ok:true,json:async()=>({session_id:'regression-session'})};
+const sessionAdapters=[],messageUrls=[];
+context.fetch=async (url,options={})=>{
+  if(String(url).startsWith('/runtime-status')){const selected=new URL(String(url),'http://local').searchParams.get('adapter');const local=['loading','ready','available'].includes(lifecycle);return {ok:true,json:async()=>({adapter:selected,lifecycle_status:lifecycle,mode:local?'local_model':'deterministic_fallback',available:lifecycle==='ready'||lifecycle==='available',provenance_status:'partial'})};}
+  if(String(url)==='/sessions'){const body=JSON.parse(options.body);sessionAdapters.push(body.adapter);return {ok:true,json:async()=>({session_id:'session-'+sessionAdapters.length,adapter:body.adapter})};}
   if(String(url).includes('/messages?stream=1')){
-    const frame='event: delta\ndata: '+JSON.stringify({delta:responseText})+'\n\n';let read=false;
-    return {ok:true,body:{getReader:()=>({read:async()=>{if(read)return {done:true};read=true;return {done:false,value:new TextEncoder().encode(frame)};}})}};
+    messageUrls.push(String(url));
+    const frames='event: delta\ndata: '+JSON.stringify({delta:responseText})+'\n\nevent: done\ndata: '+JSON.stringify({text:responseText,results:[{airline:'<img onerror=bad>',flight_number:1027,origin:'IAD',destination:'LAS',price:100}],model_used:false})+'\n\n';let read=false;
+    return {ok:true,body:{getReader:()=>({read:async()=>{if(read)return {done:true};read=true;return {done:false,value:new TextEncoder().encode(frames)};}})}};
   }
   return {ok:false,json:async()=>({})};
 };
@@ -96,6 +99,7 @@ vm.createContext(context);
 vm.runInContext(source,context);
 (async()=>{
   await new Promise(r=>setTimeout(r,0));
+  if(changeAdapter==='true'){ids.adapter.value='ppo_checkpoint_19';ids.adapter.dispatchEvent({type:'change'});await new Promise(r=>setTimeout(r,0));}
   ids.msg.value=payload;
   ids.form.dispatchEvent({type:'submit',preventDefault(){}});
   const clearedOnSubmit=ids.msg.value==='';
@@ -105,6 +109,9 @@ vm.runInContext(source,context);
   const elements=Object.values(ids).flatMap(n=>n.querySelectorAll('*'));
   const observed={submitted:payload,userText:find('you')?.children[1]?.textContent,
     response:find('agent')?.children[1]?.textContent,inputValue:ids.msg.value,clearedOnSubmit,
+    status:ids['runtime-status'].textContent,logText:ids.log.textContent,
+    flightOptionText:ids.log.children.find(n=>n.tagName==='UL')?.textContent,
+    sessionAdapters,messageUrls,
     injectedElements:elements.filter(n=>['IMG','SVG','IFRAME','OBJECT','EMBED'].includes(n.tagName)).length,
     injectedEventAttributes:elements.flatMap(n=>n.attributes.filter(a=>/^on/i.test(a.name)).map(a=>a.name)),
     xssMarker:context.__xss||null};
@@ -112,7 +119,7 @@ vm.runInContext(source,context);
 })();
 """
         completed = subprocess.run(
-            [node, "-e", harness, script64, payload64, response64],
+            [node, "-e", harness, script64, payload64, response64, str(change_adapter).lower(), lifecycle],
             capture_output=True, text=True, timeout=10, check=False,
         )
         self.assertEqual(completed.returncode, 0, completed.stderr[-2000:])
@@ -193,6 +200,32 @@ vm.runInContext(source,context);
         self.assertNotIn("<img", observed["response"])
         self.assertIn("not among the current simulator options", observed["response"])
         self.assertEqual(observed["inputValue"], "")
+        self.assertIn("Selected adapter: dpo", observed["status"])
+        self.assertIn("deterministic fallback", observed["status"])
+        self.assertIn("Reset session", _BROWSER_HTML)
+        self.assertIn("no airline or payment transactions", _BROWSER_HTML)
+        self.assertIn("flight 1027", observed["logText"])
+        self.assertEqual(observed["flightOptionText"], "<img onerror=bad> · flight 1027 · IAD to LAS · $100")
+
+    def test_BR008_adapter_change_recreates_matching_session_before_message(self):
+        observed = self.run_browser_submit("Find flights", change_adapter=True)
+        self.assertEqual(observed["sessionAdapters"], ["dpo", "ppo_checkpoint_19"])
+        self.assertIn("session-2", observed["messageUrls"][0])
+        self.assertIn("Selected adapter: ppo_checkpoint_19", observed["status"])
+
+    def test_BR009_runtime_lifecycle_states_render_safe_labels(self):
+        expected = {
+            "loading": "Loading local model",
+            "ready": "Local model ready",
+            "available": "Local model available",
+            "unavailable": "Unavailable · deterministic fallback",
+            "incompatible": "Incompatible · deterministic fallback",
+        }
+        for lifecycle, label in expected.items():
+            with self.subTest(lifecycle=lifecycle):
+                observed = self.run_browser_submit("hello", lifecycle=lifecycle)
+                self.assertIn(label, observed["status"])
+                self.assertIn("provenance partial", observed["status"])
 
     def test_BR007_accepted_text_is_rendered_as_text_and_cleared_from_input(self):
         payload = '<b>ordinary submitted text</b>'

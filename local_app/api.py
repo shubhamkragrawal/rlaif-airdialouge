@@ -22,10 +22,31 @@ MAX_REQUEST_BYTES = 64 * 1024
 class SessionAPI:
     """Thread-safe in-memory session store used by the local HTTP server."""
 
-    def __init__(self, controller: ConversationController | None = None):
+    def __init__(self, controller: ConversationController | None = None, runtime_status_provider=None):
         self.controller = controller or ConversationController(audit=AuditLog())
+        self.runtime_status_provider = runtime_status_provider or self._fallback_runtime_status
         self.sessions: dict[str, SessionState] = {}
         self._lock = threading.RLock()
+
+    @staticmethod
+    def _fallback_runtime_status(adapter: str) -> dict[str, Any]:
+        return {"adapter": adapter, "lifecycle_status": "unavailable",
+                "mode": "deterministic_fallback", "available": False,
+                "provenance_status": "unavailable"}
+
+    def runtime_status(self, adapter: str) -> dict[str, Any]:
+        status = self.runtime_status_provider(adapter)
+        if not isinstance(status, Mapping):
+            raise ValueError("Runtime status is unavailable")
+        lifecycle = status.get("lifecycle_status")
+        mode = status.get("mode")
+        provenance = status.get("provenance_status")
+        if (lifecycle not in {"loading", "ready", "available", "configured", "unavailable", "incompatible"}
+                or mode not in {"local_model", "deterministic_fallback"}
+                or provenance not in {"complete", "partial", "pending", "unavailable", "error"}):
+            raise ValueError("Runtime status is unavailable")
+        return {"adapter": adapter, "lifecycle_status": lifecycle, "mode": mode,
+                "available": bool(status.get("available")), "provenance_status": provenance}
 
     def create(self, adapter: str = "sft") -> tuple[str, SessionState]:
         state = self.controller.new_session(adapter)
@@ -139,6 +160,15 @@ def make_server(host: str = "127.0.0.1", port: int = 8000, api: SessionAPI | Non
                 return self._json(HTTPStatus.OK, {"status": "ok", "simulator": True})
             if parts == ["adapters"]:
                 return self._json(HTTPStatus.OK, {"adapters": ADAPTERS})
+            if parts == ["runtime-status"]:
+                adapter = parse_qs(urlparse(self.path).query).get("adapter", ["sft"])[0]
+                if adapter not in ADAPTERS:
+                    return self._error(HTTPStatus.BAD_REQUEST, "invalid_adapter", "Unknown adapter")
+                try:
+                    return self._json(HTTPStatus.OK, api.runtime_status(adapter))
+                except Exception:
+                    return self._error(HTTPStatus.SERVICE_UNAVAILABLE, "runtime_status_unavailable",
+                                       "Runtime status is temporarily unavailable")
             if len(parts) == 2 and parts[0] == "sessions":
                 try:
                     state = api.get(parts[1])
@@ -250,16 +280,19 @@ def _text_chunks(text: str, size: int = 24):
 _BROWSER_HTML = '''<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>RLAIF local agent</title>
-<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:0 16px}#log{min-height:300px;border:1px solid #ddd;padding:16px;overflow:auto}input{width:78%;padding:10px}button,select{padding:10px}p{white-space:pre-wrap}.meta{color:#666;font-size:12px}.error{color:#a00}</style></head>
+<style>body{font:16px system-ui;max-width:760px;margin:40px auto;padding:0 16px}#log{min-height:300px;border:1px solid #ddd;padding:16px;overflow:auto}input{width:78%;padding:10px}button,select{padding:10px}p{white-space:pre-wrap}.meta{color:#666;font-size:12px}.error{color:#a00}.flight-options{padding-left:1.5rem}.flight-options li{margin:.35rem 0}</style></head>
 <body><h1>RLAIF flight assistant</h1><p class="meta">Local simulator only — no airline or payment transactions.</p>
 <label>Adapter <select id="adapter"><option>sft</option><option>dpo</option><option>ppo_checkpoint_19</option><option>ppo_adaptive_50</option></select></label>
-<button id="reset" type="button">Reset</button><div id="log" aria-live="polite"></div>
+<p id="runtime-status" class="meta" role="status">Checking selected adapter…</p>
+<button id="reset" type="button">Reset session</button><div id="log" aria-live="polite"></div>
 <form id="form"><input id="msg" autocomplete="off" placeholder="Find a flight from IAD to LAS" required><button>Send</button></form>
 <script>
-let sid;const log=document.getElementById('log'),msg=document.getElementById('msg'),adapter=document.getElementById('adapter');
+let sid,sessionAdapter=null,switching=false;const log=document.getElementById('log'),msg=document.getElementById('msg'),adapter=document.getElementById('adapter'),runtimeStatus=document.getElementById('runtime-status');
 function add(w,t,cls){const p=document.createElement('p'),b=document.createElement('b'),span=document.createElement('span');b.textContent=w+': ';span.textContent=t;p.append(b,span);if(cls)p.className=cls;log.appendChild(p);log.scrollTop=log.scrollHeight;return span}
 async function jsonRequest(url,options){const r=await fetch(url,options);let x;try{x=await r.json()}catch(_){throw new Error('Server returned an invalid response')}if(!r.ok)throw new Error(x.error?.message||'Request failed');return x}
-async function reset(){try{const x=await jsonRequest('/sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({adapter:adapter.value})});sid=x.session_id;log.replaceChildren();add('system','New simulated session')}catch(e){add('error',e.message,'error')}}
-async function send(e){e.preventDefault();const m=msg.value.trim();if(!m)return;if(!sid)await reset();msg.value='';add('you',m);const target=add('agent','');try{const r=await fetch('/sessions/'+encodeURIComponent(sid)+'/messages?stream=1',{method:'POST',headers:{'content-type':'application/json','accept':'text/event-stream'},body:JSON.stringify({message:m})});if(!r.ok){const x=await r.json();throw new Error(x.error?.message||'Request failed')}const reader=r.body.getReader(),decoder=new TextDecoder();let pending='';while(true){const part=await reader.read();if(part.done)break;pending+=decoder.decode(part.value,{stream:true});const events=pending.split('\\n\\n');pending=events.pop();for(const event of events){if(!event.startsWith('event: delta'))continue;const line=event.split('\\n').find(v=>v.startsWith('data: '));if(line)target.textContent+=JSON.parse(line.slice(6)).delta}}}catch(err){target.textContent=err.message;target.parentElement.className='error'}}
-document.getElementById('reset').addEventListener('click',reset);document.getElementById('form').addEventListener('submit',send);reset();
+async function refreshStatus(){const selected=adapter.value;try{const s=await jsonRequest('/runtime-status?adapter='+encodeURIComponent(selected));if(selected!==adapter.value)return;const states={loading:'Loading local model',ready:'Local model ready',available:'Local model available',configured:'Configured · deterministic fallback (model files unavailable)',unavailable:'Unavailable · deterministic fallback',incompatible:'Incompatible · deterministic fallback'};const provenance={complete:'provenance complete',partial:'provenance partial',pending:'provenance loading',unavailable:'provenance unavailable',error:'provenance unavailable'};runtimeStatus.textContent='Selected adapter: '+s.adapter+' · '+(states[s.lifecycle_status]||'Runtime status unavailable')+' · '+(provenance[s.provenance_status]||'provenance status unavailable');runtimeStatus.dataset.mode=s.mode==='local_model'?'local_model':'deterministic_fallback'}catch(_){if(selected===adapter.value){runtimeStatus.textContent='Selected adapter: '+selected+' · Runtime status unavailable';runtimeStatus.dataset.mode='deterministic_fallback'}}}
+function showFlights(results){if(!Array.isArray(results)||!results.length)return;const list=document.createElement('ul');list.className='flight-options';list.setAttribute('aria-label','Flight options');for(const f of results){const item=document.createElement('li');const origin=f.origin||f.departure_airport,destination=f.destination||f.return_airport;item.textContent=[f.airline||'Flight',f.flight_number?'flight '+f.flight_number:'',origin&&destination?origin+' to '+destination:'',f.price!=null?'$'+f.price:'',f.departure_time||''].filter(Boolean).join(' · ');list.appendChild(item)}log.appendChild(list)}
+async function reset(){switching=true;sid=null;sessionAdapter=null;adapter.disabled=true;try{const selected=adapter.value;const x=await jsonRequest('/sessions',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({adapter:selected})});if(selected!==adapter.value)return;sid=x.session_id;sessionAdapter=x.adapter;log.replaceChildren();add('system','New simulated session');await refreshStatus()}catch(_){add('error','Could not start a session. Please try again.','error')}finally{adapter.disabled=false;switching=false}}
+async function send(e){e.preventDefault();const m=msg.value.trim();if(!m||switching||!sid||sessionAdapter!==adapter.value)return;msg.value='';add('you',m);const target=add('agent','');try{const r=await fetch('/sessions/'+encodeURIComponent(sid)+'/messages?stream=1',{method:'POST',headers:{'content-type':'application/json','accept':'text/event-stream'},body:JSON.stringify({message:m})});if(!r.ok){let x={};try{x=await r.json()}catch(_){}throw new Error(x.error?.message||'Request failed')}const reader=r.body.getReader(),decoder=new TextDecoder();let pending='',finalResult=null;while(true){const part=await reader.read();if(part.done)break;pending+=decoder.decode(part.value,{stream:true});const events=pending.split('\\n\\n');pending=events.pop();for(const event of events){const line=event.split('\\n').find(v=>v.startsWith('data: '));if(!line)continue;const data=JSON.parse(line.slice(6));if(event.startsWith('event: delta'))target.textContent+=data.delta;else if(event.startsWith('event: done'))finalResult=data}}if(finalResult){showFlights(finalResult.results);add('status',finalResult.model_used?'Response: local model':'Response: deterministic fallback')}}catch(_){target.textContent='Could not complete the request. Please try again.';target.parentElement.className='error'}}
+adapter.addEventListener('change',()=>{refreshStatus();reset()});document.getElementById('reset').addEventListener('click',reset);document.getElementById('form').addEventListener('submit',send);reset();
 </script></body></html>'''

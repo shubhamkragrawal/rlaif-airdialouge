@@ -1,0 +1,237 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rlaif.local/schemas/matrix-v1.json",
+  "title": "RLAIF local adapter matrix report or frozen baseline v1",
+  "oneOf": [
+    {"$ref": "#/$defs/matrixReport"},
+    {"$ref": "#/$defs/frozenBaseline"}
+  ],
+  "$defs": {
+    "fourAdapters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sft", "dpo", "ppo_checkpoint_19", "ppo_adaptive_50"],
+      "properties": {
+        "sft": {"$ref": "#/$defs/arm"},
+        "dpo": {"$ref": "#/$defs/arm"},
+        "ppo_checkpoint_19": {"$ref": "#/$defs/arm"},
+        "ppo_adaptive_50": {"$ref": "#/$defs/arm"}
+      }
+    },
+    "cohort": {
+      "type": "object", "additionalProperties": true,
+      "required": ["scenario_ids", "scenario_count", "scenario_sha256", "corpus_sha256", "settings"],
+      "properties": {
+        "scenario_ids": {"type": "array", "items": {"type": "integer"}, "minItems": 1, "uniqueItems": true},
+        "scenario_count": {"type": "integer", "minimum": 1},
+        "scenario_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "corpus_sha256": {"type": ["string", "null"]},
+        "settings": {"type": "object"}
+      }
+    },
+    "runManifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record", "sha256"],
+      "properties": {
+        "record": {"type": "object"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "turnManifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["record", "evidence", "record_sha256", "sha256"],
+      "properties": {
+        "record": {
+          "type": "object",
+          "required": ["transaction_evidence_ids"],
+          "properties": {
+            "transaction_evidence_ids": {
+              "type": "array", "maxItems": 2, "uniqueItems": true,
+              "items": {"type": "string", "pattern": "^(?:hold|booking)_"}
+            }
+          }
+        },
+        "evidence": {
+          "type": "object",
+          "required": ["transaction_claim", "unsupported_transaction_claim", "authoritative_transaction_evidence"],
+          "properties": {
+            "transaction_claim": {"type": "boolean"},
+            "unsupported_transaction_claim": {"type": "boolean"},
+            "authoritative_transaction_evidence": {
+              "oneOf": [
+                {"type": "null"},
+                {
+                  "type": "object", "additionalProperties": false,
+                  "required": ["hold_id", "booking_id", "booking_status", "flight_id", "simulated", "current_turn"],
+                  "properties": {
+                    "hold_id": {"type": "string", "pattern": "^hold_"},
+                    "booking_id": {"type": "string", "pattern": "^booking_"},
+                    "booking_status": {"const": "confirmed"},
+                    "flight_id": {"type": "integer"},
+                    "simulated": {"const": true},
+                    "current_turn": {"const": true}
+                  }
+                }
+              ]
+            }
+          }
+        },
+        "record_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "runtimeStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["adapter", "lifecycle_status", "mode", "available", "provenance_status"],
+      "properties": {
+        "adapter": {"type": "string"},
+        "lifecycle_status": {"enum": ["unavailable", "configured", "incompatible", "available", "loading", "ready"]},
+        "mode": {"enum": ["local_model", "deterministic_fallback"]},
+        "available": {"type": "boolean"},
+        "provenance_status": {"enum": ["unavailable", "pending", "partial", "complete", "error"]}
+      }
+    },
+    "runtimeProvenance": {
+      "type": "object",
+      "required": ["adapter", "lifecycle_status", "mode", "available", "provenance_status", "adapter_sha256", "base_model", "base_model_revision", "generation_settings", "device", "precision", "peak_memory_bytes", "incomplete_fields", "complete", "sha256"],
+      "properties": {
+        "adapter": {"type": "string"},
+        "lifecycle_status": {"enum": ["unavailable", "configured", "incompatible", "available", "loading", "ready"]},
+        "mode": {"enum": ["local_model", "deterministic_fallback"]},
+        "available": {"type": "boolean"},
+        "provenance_status": {"enum": ["unavailable", "pending", "partial", "complete", "error"]},
+        "adapter_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "base_model": {"type": ["string", "null"]},
+        "base_model_revision": {"type": ["string", "null"]},
+        "generation_settings": {"type": ["object", "null"]},
+        "device": {"type": ["string", "null"]},
+        "precision": {"type": ["string", "null"]},
+        "peak_memory_bytes": {"type": ["integer", "null"], "minimum": 0},
+        "incomplete_fields": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "complete": {"type": "boolean"}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      },
+      "additionalProperties": true,
+      "allOf": [{
+        "if": {"properties": {"complete": {"const": true}}},
+        "then": {"properties": {
+          "adapter_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "base_model": {"type": "string", "minLength": 1},
+          "base_model_revision": {"type": "string", "minLength": 1},
+          "generation_settings": {"type": "object"},
+          "device": {"type": "string", "minLength": 1},
+          "precision": {"type": "string", "minLength": 1},
+          "peak_memory_bytes": {"type": "integer", "minimum": 0},
+          "incomplete_fields": {"maxItems": 0}
+        }}
+      }]
+    },
+    "fingerprints": {
+      "type": "object", "additionalProperties": false,
+      "required": ["controller_sha256", "outcome_schema", "corpus_sha256", "generation_settings_sha256", "runtime_provenance_sha256"],
+      "properties": {
+        "controller_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "outcome_schema": {"type": "object", "required": ["name", "version", "sha256"], "properties": {"name": {"const": "rlaif.local_app.turn_outcome"}, "version": {"const": 1}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}, "additionalProperties": false},
+        "corpus_sha256": {"type": ["string", "null"]},
+        "generation_settings_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "runtime_provenance_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "required": ["scenario_count", "task_completion", "valid_transitions", "unsupported_transaction_claim_rate", "grounded_entity_precision", "no_results_presentation_accuracy", "malformed_output_rate", "repetition_rate", "repetition_evidence", "validation", "fallback_rate", "fallback_reason_distribution", "turns", "tokens", "latency_ms", "peak_memory_mb", "judge_score"],
+      "properties": {
+        "scenario_count": {"type": "integer", "minimum": 0},
+        "task_completion": {"type": "object"}, "valid_transitions": {"type": "object"},
+        "unsupported_transaction_claim_rate": {"type": ["number", "null"]},
+        "grounded_entity_precision": {"type": ["number", "null"]},
+        "no_results_presentation_accuracy": {"type": ["number", "null"]},
+        "malformed_output_rate": {"type": ["number", "null"]},
+        "repetition_rate": {"type": ["number", "null"]},
+        "repetition_evidence": {"type": "object", "required": ["detected_turns", "observed_turns", "rate", "basis"]},
+        "validation": {"type": "object", "required": ["valid_turns", "observed_turns", "rate"]},
+        "fallback_rate": {"type": ["number", "null"]},
+        "fallback_reason_distribution": {"type": ["object", "null"]},
+        "turns": {"type": "object"}, "tokens": {"type": "object"},
+        "latency_ms": {"type": "object"},
+        "peak_memory_mb": {"type": ["number", "null"]},
+        "judge_score": {"type": "object", "required": ["value", "basis"], "properties": {"value": {"type": ["number", "null"]}, "basis": {"const": "judge-dependent"}}}
+      }
+    },
+    "arm": {
+      "type": "object",
+      "required": ["layer", "status", "status_reason", "fingerprint", "fingerprints", "cohort_id", "scenario_ids", "runtime_status", "runtime_provenance", "model_participation", "run_manifest", "turn_manifests", "summary", "metrics", "scenarios"],
+      "properties": {
+        "layer": {"enum": ["controller_only", "integrated"]},
+        "status": {"enum": ["complete", "incomplete", "unavailable"]},
+        "status_reason": {"type": ["string", "null"]},
+        "fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "fingerprints": {"$ref": "#/$defs/fingerprints"},
+        "cohort_id": {"type": "string"}, "scenario_ids": {"type": "array", "items": {"type": "integer"}},
+        "runtime_status": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeStatus"}]},
+        "runtime_provenance": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeProvenance"}]},
+        "model_participation": {"type": "object", "required": ["turns", "required"], "properties": {"turns": {"type": "integer", "minimum": 0}, "required": {"type": "boolean"}}, "additionalProperties": false},
+        "run_manifest": {"$ref": "#/$defs/runManifest"}, "turn_manifests": {"type": "array", "items": {"$ref": "#/$defs/turnManifest"}},
+        "summary": {"type": "object"}, "metrics": {"$ref": "#/$defs/metrics"},
+        "scenarios": {"type": "array", "items": {"type": "object", "required": ["scenario_id", "normalized_outcome", "metrics"]}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"layer": {"const": "controller_only"}}},
+          "then": {"properties": {
+            "runtime_status": {"type": "null"},
+            "runtime_provenance": {"type": "null"},
+            "model_participation": {"properties": {"turns": {"const": 0}, "required": {"const": false}}},
+            "fingerprints": {"properties": {"runtime_provenance_sha256": {"type": "null"}}},
+            "run_manifest": {"properties": {"record": {"properties": {"adapter": {
+              "required": ["layer", "runtime_status", "runtime_provenance"],
+              "properties": {"layer": {"const": "controller_only"}, "runtime_status": {"type": "null"}, "runtime_provenance": {"type": "null"}}
+            }}}}}
+          }}
+        },
+        {
+          "if": {"properties": {"layer": {"const": "integrated"}}},
+          "then": {"properties": {
+            "runtime_status": {"$ref": "#/$defs/runtimeStatus"},
+            "runtime_provenance": {"$ref": "#/$defs/runtimeProvenance"},
+            "model_participation": {"properties": {"required": {"const": true}}},
+            "run_manifest": {"properties": {"record": {
+              "required": ["hardware"],
+              "properties": {"hardware": {
+                "type": "object",
+                "required": ["device", "precision", "peak_memory_bytes"]
+              }}
+            }}},
+            "fingerprints": {"properties": {
+              "runtime_provenance_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+            }}
+          }}
+        }
+      ]
+    },
+    "matrixReport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "report_version", "mode", "layer", "cohort_id", "cohort", "adapters", "scenario_comparison", "baseline_freeze_allowed"],
+      "properties": {
+        "schema": {"const": "rlaif.local_app.adapter_matrix"}, "report_version": {"const": 1},
+        "mode": {"enum": ["controller_only", "integrated"]}, "layer": {"enum": ["controller_only", "integrated"]},
+        "cohort_id": {"type": "string"}, "cohort": {"$ref": "#/$defs/cohort"},
+        "adapters": {"$ref": "#/$defs/fourAdapters"}, "scenario_comparison": {"type": "object"},
+        "baseline_freeze_allowed": {"type": "boolean"}
+      },
+      "oneOf": [
+        {"properties": {"mode": {"const": "controller_only"}, "layer": {"const": "controller_only"}, "adapters": {"properties": {"sft": {"properties": {"layer": {"const": "controller_only"}}}, "dpo": {"properties": {"layer": {"const": "controller_only"}}}, "ppo_checkpoint_19": {"properties": {"layer": {"const": "controller_only"}}}, "ppo_adaptive_50": {"properties": {"layer": {"const": "controller_only"}}}}}}},
+        {"properties": {"mode": {"const": "integrated"}, "layer": {"const": "integrated"}, "adapters": {"properties": {"sft": {"properties": {"layer": {"const": "integrated"}}}, "dpo": {"properties": {"layer": {"const": "integrated"}}}, "ppo_checkpoint_19": {"properties": {"layer": {"const": "integrated"}}}, "ppo_adaptive_50": {"properties": {"layer": {"const": "integrated"}}}}}}}
+      ]
+    },
+    "frozenBaseline": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "baseline_version", "matrix_report_version", "mode", "cohort_id", "cohort", "adapters", "scenario_comparison"],
+      "properties": {
+        "schema": {"const": "rlaif.local_app.matrix_baseline"}, "baseline_version": {"const": 1},
+        "matrix_report_version": {"const": 1}, "mode": {"const": "controller_only"},
+        "cohort_id": {"type": "string"}, "cohort": {"$ref": "#/$defs/cohort"},
+        "adapters": {"$ref": "#/$defs/fourAdapters"}, "scenario_comparison": {"type": "object"}
+      },
+      "allOf": [{"properties": {"mode": {"const": "controller_only"}, "adapters": {"properties": {"sft": {"properties": {"layer": {"const": "controller_only"}}}, "dpo": {"properties": {"layer": {"const": "controller_only"}}}, "ppo_checkpoint_19": {"properties": {"layer": {"const": "controller_only"}}}, "ppo_adaptive_50": {"properties": {"layer": {"const": "controller_only"}}}}}}}]
+    }
+  }
+}

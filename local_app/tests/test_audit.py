@@ -109,6 +109,38 @@ class AuditTests(unittest.TestCase):
         self.assertIn("traveling", content)
         self.assertIn("travelling", content)
 
+    def test_case_and_script_variants_in_nested_free_text_are_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit.jsonl"
+            AuditLog(path).write("message", {"nested": [{
+                "notes": "Passengers AMY GONZALEZ, 李 雷, and Jose\u0301 Garci\u0301a are traveling; "
+                         "email amy@example.com; card 4111 1111 1111 1111"
+            }]})
+            content = path.read_text(encoding="utf-8")
+        for fragment in ("AMY", "GONZALEZ", "李", "雷", "Jose\u0301", "Garci\u0301a",
+                         "amy@example.com", "4111 1111 1111 1111"):
+            with self.subTest(fragment=fragment):
+                self.assertNotIn(fragment, content)
+        self.assertIn("traveling", content)
+
+    def test_name_heuristic_preserves_airports_and_general_text(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit.jsonl"
+            AuditLog(path).write("message", {"text": "Search JFK to LAX; the flight is on time."})
+            content = path.read_text(encoding="utf-8")
+        self.assertIn("JFK to LAX", content)
+        self.assertIn("flight is on time", content)
+
+    def test_all_caps_name_near_pii_labels_is_redacted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "audit.jsonl"
+            AuditLog(path).write("message", {
+                "text": "AMY GONZALEZ; email amy@example.com; card 4111 1111 1111 1111"
+            })
+            content = path.read_text(encoding="utf-8")
+        for fragment in ("AMY", "GONZALEZ", "amy@example.com", "4111 1111 1111 1111"):
+            self.assertNotIn(fragment, content)
+
 
 if __name__ == "__main__":
     unittest.main()
