@@ -6,6 +6,16 @@ This project is a flight-booking dialogue agent trained with reinforcement learn
 
 The final comparison is measured on the same 50 held-out scenarios. Base, SFT, and DPO task success were 16%, 26%, and 34%; PPO checkpoint 19 was 38%; adaptive PPO at 50 cumulative accepted updates was 34%. These results are directional because the evaluation set is small and the confidence intervals overlap. Cloud work was bounded by a predeclared internal cost cap. The outcome tables below summarize the recorded experiment artifacts without exposing private cloud resource identifiers.
 
+After the training closeout, the four adapters were integrated into a local,
+localhost-only simulator with deterministic tools and authoritative transaction
+outcomes. A separate 50-scenario-by-four-adapter MPS matrix completed with 100%
+task completion and displayed-response validation for every arm; rejected model
+candidates were safely replaced and reported as fallbacks. The final release
+passed 340 local tests, 85 rebuild tests, and the versioned release gate. See
+`RLAIF_2_RELEASE_REPORT.md` for those local-system results. They measure the full
+guarded application and should not be conflated with the historical policy-only
+rates above.
+
 ## 1. Initial goal
 
 The initial goal was to build a flight-booking dialogue agent for the AirDialogue corpus, train a language model with supervised fine-tuning, and improve its behavior with AI-generated feedback rather than human annotators. The intended loop used a language model as the customer simulator, Gemini as the judge, and a policy optimizer such as PPO or a direct-RLAIF variant. The original README advertised preference generation and DPO, although the implementation did not contain a pair builder or DPO trainer.

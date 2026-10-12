@@ -1,13 +1,17 @@
 # RLAIF project overview
 
-This repository contains a reproducible flight booking dialogue project using
-reinforcement learning from AI feedback. The supported implementation is under
-`rebuild/rlaif`; older experiments remain under `baseline/` as audit material.
+This repository contains a completed local flight-booking dialogue application
+and a reproducible RLAIF training/evaluation package. The supported interactive
+runtime is under `local_app/`; the historical/rebuild implementation is under
+`rebuild/rlaif`. Older experiments remain under `baseline/` as audit material.
 
 ## Layout
 
 ```text
 RLAIF/
+├── local_app/            # local controller, API/UI, runtime, evaluation
+├── artifacts/            # versioned matrix and release evidence
+├── test_artifacts/       # recorded browser regression evidence
 ├── rebuild/
 │   ├── rlaif/
 │   │   ├── shared/       # corpus loading, immutable splits, prompts
@@ -23,6 +27,23 @@ RLAIF/
 ├── vertex_ai_logs/       # historical exported logs
 └── PROJECT_OVERVIEW.md
 ```
+
+## Local release status
+
+The local release is complete and does not require GCP or an external model API.
+It provides a localhost-only browser/API service, CLI, deterministic simulator,
+optional local Qwen/PEFT inference, four-adapter evaluation, strict output and
+transaction validation, and a hash-pinned release gate.
+
+The final integrated matrix evaluated 50 scenarios for each of `sft`, `dpo`,
+`ppo_checkpoint_19`, and `ppo_adaptive_50` on Apple MPS. All four arms achieved
+100% task completion, 100% validation of displayed responses, and zero displayed
+repetition. Candidate acceptance and safe fallback rates are reported separately
+in [RLAIF_2_RELEASE_REPORT.md](RLAIF_2_RELEASE_REPORT.md).
+
+The final verification passed 340 local tests and 85 rebuild tests. The release
+gate result is `artifacts/release/gate-v1/release-gate-v1.json`; operational
+commands are in [OPERATIONS.md](OPERATIONS.md).
 
 Cloud JSON files preserve the resource limits, arguments, historical image tags,
 and artifact prefixes. They use one GPU worker and finite timeouts. Their command
@@ -50,12 +71,13 @@ PYTHONPATH=RLAIF/rebuild python3 -m unittest discover \
 python3 -m json.tool RLAIF/rebuild/cloud/ppo_adaptive.json >/dev/null
 ```
 
-GPU training and Vertex evaluation are launched only through the bounded
+Historical GPU training and Vertex evaluation were defined through the bounded
 configs in `rebuild/cloud`. Use `prepare.py` for an isolated Docker context and
 `prepare_ppo_adaptive.py` for the adaptive PPO config; both write only to a new
 output directory. Use `prepare_closeout.py` for a fresh post-restructure image
 context/config with a pinned model revision. These scripts only generate files
-and do not submit jobs.
+and do not submit jobs. These cloud workflows are not required to operate or
+verify the completed local release.
 
 `rebuild/cloud/build_context.json` describes the most recently prepared local
 context. Published-image provenance is identified by the build IDs and image
@@ -115,3 +137,8 @@ its repository commit. Evaluation artifacts record the revision resolved at
 evaluation time, but an exact from-scratch reconstruction of the training base
 revision is not guaranteed unless that revision is recovered from the original
 model cache or cloud evidence.
+
+The imported policy-only evidence is summary-level because the original raw
+per-scenario policy outputs are not present locally. The integrated local matrix
+contains scenario- and turn-level evidence, but it remains a simulator evaluation
+and does not establish performance against live airline systems.

@@ -97,8 +97,8 @@ status. A CLI remains useful for smoke tests and debugging. The API should expos
 - `GET /health`
 - `GET /adapters`
 
-The API must bind to localhost by default. Public binding requires an explicit
-configuration switch and a separate security review.
+The API binds only to `127.0.0.1`, `localhost`, or `::1`. Wildcard, LAN, and
+public bind addresses are rejected; public deployment is outside this release.
 
 ### 5.2 Conversation controller
 
@@ -249,3 +249,18 @@ The local release is ready for a controlled demo when:
 - The 50-scenario regression suite completes and writes a reproducible report.
 - README instructions state hardware requirements and simulator limitations.
 - No external network or GCP dependency is required at runtime.
+
+## 11. Closeout status
+
+The acceptance criteria above are implemented and verified. The final release
+ran 50 scenarios against each of the four adapters on Apple MPS. All arms were
+complete, with 100% task completion, 100% validation of displayed responses,
+and zero displayed repetition. The final regression run passed 340 local tests
+and 85 rebuild tests, and the versioned release gate passed.
+
+Evidence is recorded in `artifacts/matrix/releases/v1/release-v1.json`,
+`artifacts/release/evidence-v1-20261012T005310274515Z/evidence-v1.json`, and
+`artifacts/release/gate-v1/release-gate-v1.json`. Historical policy-only results
+remain explicitly summary-level because their raw per-scenario records are not
+available locally. This does not affect the completeness of the new integrated
+local matrix.

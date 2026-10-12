@@ -7,20 +7,22 @@ LAN, and public addresses. The default is `127.0.0.1:8000`.
 From the `RLAIF` directory, start the deterministic simulator:
 
 ```sh
-python -m local_app.server
+.venv/bin/python -m local_app.server
 ```
 
 To enable lazy use of a locally present model adapter:
 
 ```sh
-python -m local_app.server --model
+.venv/bin/python -m local_app.server --model
 ```
 
 Both modes serve the same HTTP API. `--model` does not download adapters or base
 models. A request uses a model only when its files and runtime dependencies are
 already available; otherwise the app uses its deterministic fallback. Model
 adapter downloads, when intentionally needed, are a separate explicit operation:
-`python -m local_app.download_adapters`.
+`.venv/bin/python -m local_app.download_adapters`. That legacy helper targets
+the historical private GCS bucket and is not required or expected for the
+completed local release. Normal startup never contacts GCP or downloads models.
 
 Operational endpoints:
 
@@ -48,6 +50,21 @@ The script uses `.venv/bin/python` when present and otherwise `python3`; set
 `PYTHON` to a Python 3.11 or newer executable when needed.
 
 ## Release evidence (local only)
+
+The checked-in final integrated release is
+`artifacts/matrix/releases/v1/release-v1.json`. To reproduce the 50-scenario run
+for all four adapters, with all model files already available locally, use:
+
+```sh
+.venv/bin/python -m local_app.matrix \
+  --mode integrated --release --start 0 --count 50 \
+  --temperature 0 --max-new-tokens 160 \
+  --release-dir artifacts/matrix/releases/v1 \
+  --output artifacts/matrix/releases/v1/release-v1.json
+```
+
+On Apple Silicon, run this from a normal terminal so PyTorch can access MPS.
+The command is resumable through per-adapter checkpoints.
 
 After an integrated release artifact has already been produced, run the local
 checks and bundle their outcomes with hash references to that artifact:
@@ -93,3 +110,10 @@ paths must remain within this project, and the supplied integrated artifact
 must be the real release output for the candidate under review. The recorder
 validates the artifact's envelope and hash but does not create or claim an
 integrated release pass.
+
+The checked-in closeout bundle is
+`artifacts/release/evidence-v1-20261012T005310274515Z/evidence-v1.json`. Its six
+checks passed, including clean wheel/sdist build, offline installation into a
+fresh temporary venv, isolated imports, loopback health, and minimal evaluation.
+The corresponding gate result is
+`artifacts/release/gate-v1/release-gate-v1.json` with status `pass`.
