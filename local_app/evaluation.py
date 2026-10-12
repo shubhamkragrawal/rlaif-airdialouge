@@ -137,9 +137,23 @@ def _integrated_completeness_errors(
         errors.append("model_usage.loading_permitted")
     if model_usage.get("loading_requested") is not True:
         errors.append("model_usage.loading_requested")
-    model_turns = model_usage.get("model_turns")
+    attempted_turns = model_usage.get("model_attempted_turns")
+    if (not isinstance(attempted_turns, int) or isinstance(attempted_turns, bool)
+            or attempted_turns <= 0):
+        errors.append("model_usage.model_attempted_turns")
+    model_turns = model_usage.get("model_generated_turns", model_usage.get("model_turns"))
     if not isinstance(model_turns, int) or isinstance(model_turns, bool) or model_turns <= 0:
-        errors.append("model_usage.model_turns")
+        errors.append("model_usage.model_generated_turns")
+    accepted_turns = model_usage.get("model_accepted_turns", 0)
+    valid_generated = (isinstance(model_turns, int) and not isinstance(model_turns, bool)
+                       and model_turns >= 0)
+    valid_accepted = (isinstance(accepted_turns, int) and not isinstance(accepted_turns, bool)
+                      and accepted_turns >= 0)
+    if not valid_accepted or (valid_generated and accepted_turns > model_turns):
+        errors.append("model_usage.model_accepted_turns")
+    if (isinstance(attempted_turns, int) and not isinstance(attempted_turns, bool)
+            and valid_generated and model_turns > attempted_turns):
+        errors.append("model_usage.model_generated_turns_exceed_attempts")
     errors.extend(_integrated_provenance_errors(adapter_artifact, generation_settings))
     return errors
 
@@ -440,7 +454,8 @@ def run_scenario(
     had_rejection = False
     recovered = False
     error_types: list[str] = []
-    model_turns = model_fallbacks = input_tokens = output_tokens = 0
+    model_attempted_turns = model_generated_turns = model_accepted_turns = 0
+    model_fallbacks = input_tokens = output_tokens = 0
     started = clock()
     first_response_ms: float | None = None
     completion_ms: float | None = None
@@ -460,14 +475,15 @@ def run_scenario(
         turn_latencies.append((turn_ended - turn_started) * 1000)
         if first_response_ms is None:
             first_response_ms = (turn_ended - started) * 1000
-        if result.get("model_used"):
-            model_turns += 1
+        model_attempted_turns += bool(result.get("model_attempted"))
+        model_generated_turns += bool(result.get("model_generated"))
+        model_accepted_turns += bool(result.get("model_accepted", result.get("model_used")))
+        model_fallbacks += bool(result.get("model_fallback"))
+        if result.get("model_generated", result.get("model_used")):
             usage = result.get("usage")
             if isinstance(usage, Mapping):
                 input_tokens += _safe_count(usage.get("input_tokens"))
                 output_tokens += _safe_count(usage.get("output_tokens"))
-        elif model_loader is not None:
-            model_fallbacks += 1
 
         reason = result.get("fallback_reason") or result.get("validation_reason")
         if isinstance(reason, str) and reason and reason not in fallback_reasons:
@@ -505,6 +521,7 @@ def run_scenario(
     else:
         task_success = bool(state.last_search is not None and not state.last_search.flights)
     completed = completion_ms is not None
+    model_turns = model_generated_turns
     attempts = len(scenario.messages)
     valid_tools = search_valid + booking_valid
     tool_calls = searches + bookings
@@ -537,6 +554,9 @@ def run_scenario(
         },
         "error_types": error_types,
         "model_turns": model_turns,
+        "model_attempted_turns": model_attempted_turns,
+        "model_generated_turns": model_generated_turns,
+        "model_accepted_turns": model_accepted_turns,
         "model_fallbacks": model_fallbacks,
         "tokens": {"input": input_tokens, "output": output_tokens},
         "peak_process_rss_mb": peak_process_rss_mb(),
@@ -563,6 +583,11 @@ def aggregate_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
               if row["latency_ms"]["completed_action"] is not None]
     turns = [int(row["turn_count"]) for row in results]
     model_turns = sum(int(row.get("model_turns", 0)) for row in results)
+    model_attempted_turns = sum(int(row.get("model_attempted_turns", 0)) for row in results)
+    model_generated_turns = sum(int(row.get("model_generated_turns", row.get("model_turns", 0)))
+                                for row in results)
+    model_accepted_turns = sum(int(row.get("model_accepted_turns", row.get("model_turns", 0)))
+                               for row in results)
     model_fallbacks = sum(int(row.get("model_fallbacks", 0)) for row in results)
     input_tokens = sum(_safe_count((row.get("tokens") or {}).get("input"))
                        for row in results if isinstance(row.get("tokens") or {}, dict))
@@ -598,6 +623,9 @@ def aggregate_results(results: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "completed_action": mean(action) if action else None,
         },
         "model_turns": model_turns,
+        "model_attempted_turns": model_attempted_turns,
+        "model_generated_turns": model_generated_turns,
+        "model_accepted_turns": model_accepted_turns,
         "model_fallbacks": model_fallbacks,
         "tokens": {"input": input_tokens, "output": output_tokens},
         "peak_process_rss_mb": peak_rss,
@@ -621,7 +649,9 @@ def build_report(
     results = [run_scenario(item, adapter=adapter, corpus_path=corpus_path, clock=clock,
                             model_loader=model_loader)
                for item in scenario_list]
-    model_turns = sum(row["model_turns"] for row in results)
+    model_turns = sum(row["model_generated_turns"] for row in results)
+    model_attempted_turns = sum(row["model_attempted_turns"] for row in results)
+    model_accepted_turns = sum(row["model_accepted_turns"] for row in results)
     model_fallbacks = sum(row["model_fallbacks"] for row in results)
     layer = layer or ("integrated" if model_loader is not None else "controller_only")
     if layer not in {"controller_only", "integrated"}:
@@ -650,7 +680,11 @@ def build_report(
         controller_usage={"executed": True, "turns": sum(row["turn_count"] for row in results)},
         model_usage={"loading_permitted": model_loader is not None,
                      "loading_requested": model_loader is not None,
-                     "model_turns": model_turns, "fallback_turns": model_fallbacks,
+                     "model_turns": model_turns,
+                     "model_attempted_turns": model_attempted_turns,
+                     "model_generated_turns": model_turns,
+                     "model_accepted_turns": model_accepted_turns,
+                     "fallback_turns": model_fallbacks,
                      "fallback_reasons": sorted({reason for row in results
                                                   for reason in row["fallback_reasons"]})},
         provenance=_artifact_provenance([corpus, Path(__file__),

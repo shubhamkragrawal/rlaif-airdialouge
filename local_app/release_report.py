@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Mapping
@@ -22,7 +23,8 @@ METRIC_FIELDS = (
     "grounded_entity_precision", "no_results_presentation_accuracy",
     "malformed_output_rate", "repetition_rate", "repetition_evidence", "validation",
     "fallback_rate", "fallback_reason_distribution", "turns", "tokens", "latency_ms",
-    "peak_memory_mb", "judge_score",
+    "peak_memory_mb", "judge_score", "booking_success",
+    "unknown_flight_id_hallucination_rate",
 )
 
 
@@ -46,6 +48,27 @@ def _metric_lines(metrics: Mapping[str, Any]) -> list[str]:
         rendered = "unavailable" if value is None else json.dumps(_safe(value), sort_keys=True, ensure_ascii=True)
         lines.append(f"- `{name}`: {rendered}")
     return lines
+
+
+def _hardware_matches_provenance(record: Mapping[str, Any], provenance: Mapping[str, Any],
+                                 summary: Any) -> bool:
+    hardware = record.get("hardware")
+    if not isinstance(hardware, Mapping):
+        return False
+    for field in ("device", "precision"):
+        expected = provenance.get(field)
+        if not isinstance(expected, str) or not expected or hardware.get(field) != expected:
+            return False
+    expected_peak = provenance.get("peak_memory_bytes")
+    observed_peak = hardware.get("peak_memory_bytes")
+    if (not isinstance(expected_peak, int) or isinstance(expected_peak, bool) or expected_peak < 0
+            or not isinstance(observed_peak, int) or isinstance(observed_peak, bool)
+            or observed_peak != expected_peak):
+        return False
+    if "peak_process_rss_mb" in hardware:
+        return (isinstance(summary, Mapping)
+                and hardware["peak_process_rss_mb"] == summary.get("peak_process_rss_mb"))
+    return True
 
 
 def _safe(value: Any) -> Any:
@@ -85,38 +108,60 @@ def _integrated_complete(integrated: Any) -> bool:
         return False
     cohort = integrated.get("cohort") or {}
     ids = cohort.get("scenario_ids")
-    if not isinstance(ids, list) or len(ids) != 50 or cohort.get("scenario_count") != 50:
+    if (not isinstance(ids, list) or len(ids) != 50 or cohort.get("scenario_count") != 50
+            or any(not isinstance(item, int) or isinstance(item, bool) for item in ids)
+            or len(set(ids)) != len(ids)):
         return False
     arms = integrated.get("adapters")
     if not isinstance(arms, Mapping) or set(arms) != set(ADAPTERS):
         return False
     for name in ADAPTERS:
         arm = arms[name]
+        if not isinstance(arm, Mapping):
+            return False
         provenance = arm.get("runtime_provenance") or {}
         participation = arm.get("model_participation") or {}
         manifest = arm.get("run_manifest") or {}
         metrics = arm.get("metrics") or {}
-        hardware = manifest.get("record", {}).get("hardware", {}) if isinstance(manifest, Mapping) else {}
+        if not all(isinstance(item, Mapping) for item in (provenance, participation, manifest, metrics)):
+            return False
+        run_record = manifest.get("record")
+        hardware = run_record.get("hardware") if isinstance(run_record, Mapping) else None
         provenance_payload = ({key: value for key, value in provenance.items() if key != "sha256"}
                               if isinstance(provenance, Mapping) else {})
-        provenance_hash_valid = provenance.get("sha256") == hashlib.sha256(json.dumps(
-            provenance_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
-            allow_nan=False).encode()).hexdigest()
-        run_hash_valid = (isinstance(manifest.get("record"), Mapping)
-                          and manifest.get("sha256") == hashlib.sha256(json.dumps(
-                              manifest["record"], sort_keys=True, separators=(",", ":"),
-                              ensure_ascii=False, allow_nan=False).encode()).hexdigest())
+        try:
+            provenance_hash_valid = provenance.get("sha256") == hashlib.sha256(json.dumps(
+                provenance_payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                allow_nan=False).encode()).hexdigest()
+            run_hash_valid = (isinstance(run_record, Mapping)
+                              and manifest.get("sha256") == hashlib.sha256(json.dumps(
+                                  run_record, sort_keys=True, separators=(",", ":"),
+                                  ensure_ascii=False, allow_nan=False).encode()).hexdigest())
+        except (TypeError, ValueError):
+            return False
         turns = arm.get("turn_manifests")
         turn_hashes_valid = isinstance(turns, list) and bool(turns)
+        scenario_turn_counts = {scenario_id: 0 for scenario_id in ids}
+        observed_model_counts = {key: 0 for key in (
+            "attempted_turns", "generated_turns", "accepted_turns", "fallback_turns")}
+        observed_token_totals = {"input": 0, "output": 0}
+        observed_token_values = {"input": False, "output": False}
         if turn_hashes_valid:
             for turn in turns:
+                if not isinstance(turn, Mapping) or not isinstance(turn.get("record"), Mapping):
+                    turn_hashes_valid = False
+                    break
                 record = turn.get("record")
                 evidence = turn.get("evidence")
-                record_hash = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":"),
-                                                         ensure_ascii=False, allow_nan=False).encode()).hexdigest()
-                full_hash = hashlib.sha256(json.dumps({"record": record, "evidence": evidence},
-                                                      sort_keys=True, separators=(",", ":"),
-                                                      ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+                try:
+                    record_hash = hashlib.sha256(json.dumps(record, sort_keys=True, separators=(",", ":"),
+                                                             ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+                    full_hash = hashlib.sha256(json.dumps({"record": record, "evidence": evidence},
+                                                          sort_keys=True, separators=(",", ":"),
+                                                          ensure_ascii=False, allow_nan=False).encode()).hexdigest()
+                except (TypeError, ValueError):
+                    turn_hashes_valid = False
+                    break
                 if turn.get("record_sha256") != record_hash or turn.get("sha256") != full_hash:
                     turn_hashes_valid = False
                     break
@@ -139,6 +184,42 @@ def _integrated_complete(integrated: Any) -> bool:
                             != [transaction.get("hold_id"), transaction.get("booking_id")]):
                         turn_hashes_valid = False
                         break
+                try:
+                    scenario_id = record.get("scenario_id")
+                    if isinstance(scenario_id, bool):
+                        raise ValueError
+                    scenario_id = int(scenario_id)
+                except (TypeError, ValueError):
+                    turn_hashes_valid = False
+                    break
+                if scenario_id not in scenario_turn_counts or evidence.get("scenario_id") != scenario_id:
+                    turn_hashes_valid = False
+                    break
+                scenario_turn_counts[scenario_id] += 1
+                for counter, evidence_key in (
+                        ("attempted_turns", "model_attempted"),
+                        ("generated_turns", "model_generated"),
+                        ("accepted_turns", "model_accepted"),
+                        ("fallback_turns", "model_fallback")):
+                    flag = evidence.get(evidence_key)
+                    if not isinstance(flag, bool):
+                        turn_hashes_valid = False
+                        break
+                    observed_model_counts[counter] += int(flag)
+                if not turn_hashes_valid:
+                    break
+                for token_name, evidence_name in (("input", "input_tokens"),
+                                                   ("output", "output_tokens")):
+                    value = evidence.get(evidence_name)
+                    if value is not None:
+                        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                                or not math.isfinite(value) or value < 0):
+                            turn_hashes_valid = False
+                            break
+                        observed_token_totals[token_name] += value
+                        observed_token_values[token_name] = True
+                if not turn_hashes_valid:
+                    break
                 if (evidence.get("valid_search_transition") is False
                         or evidence.get("valid_booking_transition") is False
                         or (evidence.get("expected_no_results") is True
@@ -158,14 +239,73 @@ def _integrated_complete(integrated: Any) -> bool:
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value != target:
                 quality_complete = False
                 break
+        counts = tuple(participation.get(key) for key in (
+            "attempted_turns", "generated_turns", "accepted_turns", "fallback_turns"))
+        counts_valid = (all(isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                            for value in counts)
+                        and participation.get("required") is True)
+        if counts_valid:
+            attempted, generated, accepted, fallbacks = counts
+            counts_valid = (attempted > 0 and generated > 0 and generated <= attempted
+                            and accepted <= generated and fallbacks <= attempted
+                            and participation.get("turns") == generated
+                            and observed_model_counts == {
+                                "attempted_turns": attempted, "generated_turns": generated,
+                                "accepted_turns": accepted, "fallback_turns": fallbacks})
+        scenarios = arm.get("scenarios")
+        scenario_coverage_valid = isinstance(scenarios, list) and [
+            row.get("scenario_id") for row in scenarios if isinstance(row, Mapping)
+        ] == ids
+        if scenario_coverage_valid:
+            for row in scenarios:
+                row_metrics = row.get("metrics")
+                turn_count = row_metrics.get("turn_count") if isinstance(row_metrics, Mapping) else None
+                if (not isinstance(turn_count, int) or isinstance(turn_count, bool)
+                        or turn_count < 0 or scenario_turn_counts[row["scenario_id"]] != turn_count):
+                    scenario_coverage_valid = False
+                    break
+                normalized = row.get("normalized_outcome")
+                success = row_metrics.get("task_success") if isinstance(row_metrics, Mapping) else None
+                if (not isinstance(success, bool) or not isinstance(normalized, Mapping)
+                        or normalized.get("task_success") is not success):
+                    scenario_coverage_valid = False
+                    break
+        completion = metrics.get("task_completion")
+        successes = (sum(row["metrics"]["task_success"] is True for row in scenarios)
+                     if scenario_coverage_valid else None)
+        completion_valid = (isinstance(completion, Mapping)
+                            and isinstance(scenarios, list)
+                            and isinstance(completion.get("successes"), int)
+                            and not isinstance(completion.get("successes"), bool)
+                            and completion.get("successes") == successes
+                            and completion.get("rate") == successes / len(ids)
+                            and metrics.get("scenario_count") == len(ids))
+        token_metrics = metrics.get("tokens")
+        tokens_valid = isinstance(token_metrics, Mapping)
+        if tokens_valid:
+            for token_name in ("input", "output"):
+                retained_total = (observed_token_totals[token_name]
+                                  if observed_token_values[token_name] else None)
+                if token_metrics.get(token_name) != retained_total:
+                    tokens_valid = False
+                    break
+        inference = metrics.get("model_inference")
+        inference_valid = (isinstance(inference, Mapping)
+                           and all(inference.get(key) == value for key, value in zip(
+                               ("attempted_turns", "generated_turns", "accepted_turns", "fallback_turns"),
+                               counts))
+                           and isinstance(inference.get("fallback_reasons"), list))
         if (arm.get("layer") != "integrated" or arm.get("status") != "complete"
                 or arm.get("scenario_ids") != ids or provenance.get("complete") is not True
                 or not re.fullmatch(r"[0-9a-f]{64}", str(provenance.get("sha256", "")))
-                or participation.get("required") is not True or participation.get("turns", 0) <= 0
+                or not counts_valid
                 or not re.fullmatch(r"[0-9a-f]{64}", str(manifest.get("sha256", "")))
-                or not hardware.get("device") or not hardware.get("precision")
-                or hardware.get("peak_memory_bytes") is None or not quality_complete
-                or not provenance_hash_valid or not run_hash_valid or not turn_hashes_valid):
+                or not _hardware_matches_provenance(run_record, provenance, arm.get("summary"))
+                or not quality_complete
+                or metrics.get("scenario_count") != len(ids)
+                or not provenance_hash_valid or not run_hash_valid or not turn_hashes_valid
+                or not scenario_coverage_valid or not completion_valid or not tokens_valid
+                or not inference_valid):
             return False
     return True
 
@@ -212,8 +352,22 @@ def render_release_report(*, policy_path: str | Path = POLICY_DEFAULT,
     if not imported:
         out.append("Policy metrics: unavailable; the referenced evidence report does not import result metrics.")
     else:
-        out.append("Policy metrics (allowlisted fields only):")
-        out.extend(_metric_lines(policy.get("summary") if isinstance(policy.get("summary"), Mapping) else {}))
+        summary = policy.get("summary") if isinstance(policy.get("summary"), Mapping) else {}
+        policy_adapters = summary.get("adapters")
+        if isinstance(policy_adapters, Mapping):
+            evidence_level = _safe(policy_layer.get("evidence_level", summary.get("evidence_level", "unspecified")))
+            out.append(f"Policy evidence level: `{evidence_level}`. Aggregate metrics below are imported from the cited summary; they are not scenario-level records.")
+            for adapter in ADAPTERS:
+                arm = policy_adapters.get(adapter, {})
+                arm = arm if isinstance(arm, Mapping) else {}
+                out += ["", f"#### `{adapter}` — summary-level", ""]
+                out.extend(_metric_lines(arm))
+        else:
+            out.append("Policy metrics (allowlisted fields only):")
+            out.extend(_metric_lines(summary))
+        reason = policy_layer.get("status_reason")
+        if reason:
+            out.append(f"Policy evidence limitation: {_safe(reason)}")
     artifacts = policy.get("evidence_artifacts", []) if policy_valid else []
     if artifacts:
         out.append("Evidence artifact digests:")

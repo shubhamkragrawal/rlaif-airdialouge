@@ -230,7 +230,10 @@ class ConversationController:
             state.turns.append({"role": "assistant", "content": response})
             result = {"text": response, "adapter": state.adapter, "turn": state.turn_count,
                       "results": [], "simulated": True, "model_used": False,
-                      "usage": None, "fallback_reason": reason, "validation_reason": reason}
+                      "model_attempted": False, "model_generated": False,
+                      "model_accepted": False, "model_fallback": False,
+                      "model_fallback_reason": None, "usage": None,
+                      "fallback_reason": reason, "validation_reason": None}
             if self.audit: self.audit.write("assistant_response", result)
             return result
         try:
@@ -266,21 +269,36 @@ class ConversationController:
             authoritative_text = True
         if authoritative_text:
             response, model_used, usage = outcome.deterministic_response, False, None
+            model_attempted = model_generated = model_fallback = False
+            model_fallback_reason = None
         else:
-            response, model_used, usage, model_fallback_reason = self._model_response(state, outcome)
+            (response, model_used, usage, model_fallback_reason,
+             model_attempted, model_generated) = self._model_response(state, outcome)
             deadline_reasons = state.budget.exceeded_reasons() if state.budget else ()
             if deadline_reasons:
                 model_used, usage = False, None
                 response = outcome.deterministic_response
                 model_fallback_reason = deadline_reasons[0].value
+            model_requested = (model_attempted or self.model_loader is not None
+                               or self.model_adapters.get(state.adapter) is not None)
+            model_fallback = model_requested and not model_used
             if not model_used and (self.model_adapters.get(state.adapter) is not None or self.model_loader is not None):
                 outcome = replace(outcome, fallback_reason=model_fallback_reason or "model_validation_failed")
+        final_errors = validate_output(response, outcome)
+        final_validation_reason = final_errors[0].code if final_errors else None
         state.turns.append({"role": "assistant", "content": response})
         result = {"text": response, "adapter": state.adapter, "turn": state.turn_count,
                 "results": [flight_dict(f) for f in results], "simulated": True,
-                "model_used": model_used, "usage": usage,
+                "model_used": model_used, "model_attempted": model_attempted,
+                "model_generated": model_generated, "model_accepted": model_used,
+                "model_fallback": model_fallback,
+                "model_fallback_reason": model_fallback_reason, "usage": usage,
                 "fallback_reason": outcome.fallback_reason,
-                "validation_reason": outcome.fallback_reason}
+                # Keep the historical field as the candidate/fallback reason for
+                # callers that use it to diagnose rejected model output.  The
+                # final user-visible response is validated independently.
+                "validation_reason": outcome.fallback_reason,
+                "final_validation_reason": final_validation_reason}
         if self.audit:
             self.audit.write("assistant_response", result)
         return result
@@ -289,7 +307,7 @@ class ConversationController:
         self,
         state: SessionState,
         outcome: TurnOutcome,
-    ) -> tuple[str, bool, dict[str, int] | None, str | None]:
+    ) -> tuple[str, bool, dict[str, int] | None, str | None, bool, bool]:
         """Generate with the selected model and fail back to grounded local text.
 
         Tools and state transitions have already been handled by ``_respond``.
@@ -297,6 +315,9 @@ class ConversationController:
         expand the set of flights that may be mentioned.
         """
         deterministic_response = outcome.deterministic_response
+        attempted = False
+        generated = False
+        usage = None
         results = self._outcome_flights(outcome)
         retrieved = [flight_dict(flight) for flight in results]
         messages = [
@@ -314,12 +335,12 @@ class ConversationController:
         try:
             adapter = self.model_adapters.get(state.adapter)
             if adapter is None and self.model_loader is None:
-                return deterministic_response, False, None, None
+                return deterministic_response, False, None, None, attempted, generated
             if self.limits.max_generation_tokens == 0:
-                return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value
+                return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value, attempted, generated
             reasons = state.budget.check_generation_length(self.limits.max_generation_tokens) if state.budget else ()
             if reasons:
-                return deterministic_response, False, None, reasons[0].value
+                return deterministic_response, False, None, reasons[0].value, attempted, generated
             remaining = state.budget.remaining_seconds() if state.budget else self.limits.max_session_seconds
             def load_and_generate(cancel_event):
                 if adapter is not None:
@@ -348,30 +369,32 @@ class ConversationController:
                     kwargs["cancel_event"] = cancel_event
                 return generate(messages, retrieved, **kwargs), loaded
 
+            attempted = True
             response, adapter = self._bounded_adapter_call(load_and_generate, remaining)
+            generated = isinstance(response, str)
             usage = getattr(adapter, "last_usage", None)
             if isinstance(usage, Mapping):
                 input_tokens = usage.get("input_tokens")
                 output_tokens = usage.get("output_tokens")
                 if isinstance(output_tokens, int) and not isinstance(output_tokens, bool) and output_tokens > self.limits.max_generation_tokens:
-                    return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value
+                    return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value, attempted, generated
                 if (isinstance(input_tokens, bool) or not isinstance(input_tokens, int) or input_tokens <= 0
                         or isinstance(output_tokens, bool) or not isinstance(output_tokens, int) or output_tokens <= 0):
-                    return deterministic_response, False, None, "malformed_usage"
+                    return deterministic_response, False, None, "malformed_usage", attempted, generated
             elif usage is None and isinstance(response, str):
                 # UTF-8 bytes provide a deterministic conservative upper bound
                 # when the adapter does not report counters.
                 input_tokens = len(repr((messages, retrieved)).encode("utf-8"))
                 output_tokens = len(response.encode("utf-8"))
                 if output_tokens > self.limits.max_generation_tokens:
-                    return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value
+                    return deterministic_response, False, None, LimitReason.GENERATION_LENGTH.value, attempted, generated
                 usage = {"input_tokens": input_tokens, "output_tokens": output_tokens,
                          "estimated": True}
             else:
-                return deterministic_response, False, None, "malformed_usage"
+                return deterministic_response, False, None, "malformed_usage", attempted, generated
             if state.budget and state.budget.exceeded_reasons():
                 reason = state.budget.exceeded_reasons()[0].value
-                return deterministic_response, False, None, reason
+                return deterministic_response, False, usage, reason, attempted, generated
             errors = validate_output(response, outcome)
             if errors:
                 raise ValueError(errors[0].code)
@@ -392,8 +415,8 @@ class ConversationController:
                                                "generation_length_exceeded"} else (
                 next((e.code for e in validate_output(response, outcome)), "model_runtime_error")
                 if 'response' in locals() else "model_runtime_error")
-            return deterministic_response, False, None, reason
-        return response.strip(), True, usage, None
+            return deterministic_response, False, usage, reason, attempted, generated
+        return response.strip(), True, usage, None, attempted, generated
 
     @property
     def adapter_worker_active(self) -> bool:

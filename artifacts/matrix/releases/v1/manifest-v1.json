@@ -1,0 +1,26 @@
+{
+  "identity": {
+    "adapter_sha256": {
+      "dpo": "8d8db15b35985c53e478cab7487920c144161bb0ca2c613254f4f4c8e250335f",
+      "ppo_adaptive_50": "957f5d26bf48fbb43b5e3a9b658768deac7afc73124dbd1e01d6d2f2f4e626fb",
+      "ppo_checkpoint_19": "d14068f7c57f2eb626c0579bd9e44d8f6576fb1d073f59ad1efca5d2c8c89425",
+      "sft": "9988a3202161922461d530c91845b3114bb3583a4b5a869fe9b6561cf8d726e3"
+    },
+    "base_model": "Qwen/Qwen2.5-3B-Instruct",
+    "base_model_revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+    "controller_sha256": "1b87dc7d3cf429c71289ca9a8c2fd79e5de09bda1ff118d7593fc38ddca15586",
+    "corpus_sha256": "dda7898144f9a326f558088353d3fcc16da6f4865daec7e8c4324f17496959e4",
+    "generation_settings": {
+      "base_model": "Qwen/Qwen2.5-3B-Instruct",
+      "count": 50,
+      "max_new_tokens": 160,
+      "mode": "model",
+      "revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+      "start": 0,
+      "temperature": 0.0
+    }
+  },
+  "release_version": 1,
+  "schema": "rlaif.local_app.matrix_release",
+  "sha256": "a39aa6cc997c68066c23b7bb8ba25a7b9d249005a02f806e4e2e95bd5edaee9a"
+}

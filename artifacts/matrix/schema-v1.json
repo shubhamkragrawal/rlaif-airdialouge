@@ -1,10 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://rlaif.local/schemas/matrix-v1.json",
-  "title": "RLAIF local adapter matrix report or frozen baseline v1",
+  "title": "RLAIF local adapter matrix, release, manifest, or frozen baseline v1",
   "oneOf": [
     {"$ref": "#/$defs/matrixReport"},
-    {"$ref": "#/$defs/frozenBaseline"}
+    {"$ref": "#/$defs/frozenBaseline"},
+    {"$ref": "#/$defs/matrixRelease"},
+    {"$ref": "#/$defs/releaseManifest"},
+    {"$ref": "#/$defs/releaseCheckpoint"}
   ],
   "$defs": {
     "fourAdapters": {
@@ -56,6 +59,13 @@
           "properties": {
             "transaction_claim": {"type": "boolean"},
             "unsupported_transaction_claim": {"type": "boolean"},
+            "model_attempted": {"type": "boolean"},
+            "model_generated": {"type": "boolean"},
+            "model_accepted": {"type": "boolean"},
+            "model_fallback": {"type": "boolean"},
+            "model_fallback_reason": {"type": ["string", "null"]},
+            "validation_result": {"enum": ["valid", "failed"]},
+            "validation_reason": {"type": ["string", "null"]},
             "authoritative_transaction_evidence": {
               "oneOf": [
                 {"type": "null"},
@@ -153,7 +163,8 @@
         "turns": {"type": "object"}, "tokens": {"type": "object"},
         "latency_ms": {"type": "object"},
         "peak_memory_mb": {"type": ["number", "null"]},
-        "judge_score": {"type": "object", "required": ["value", "basis"], "properties": {"value": {"type": ["number", "null"]}, "basis": {"const": "judge-dependent"}}}
+        "judge_score": {"type": "object", "required": ["value", "basis"], "properties": {"value": {"type": ["number", "null"]}, "basis": {"const": "judge-dependent"}}},
+        "model_inference": {"type": "object", "required": ["attempted_turns", "generated_turns", "accepted_turns", "fallback_turns", "acceptance_rate", "fallback_reasons"], "properties": {"attempted_turns": {"type": "integer", "minimum": 0}, "generated_turns": {"type": "integer", "minimum": 0}, "accepted_turns": {"type": "integer", "minimum": 0}, "fallback_turns": {"type": "integer", "minimum": 0}, "acceptance_rate": {"type": ["number", "null"], "minimum": 0, "maximum": 1}, "fallback_reasons": {"type": "array", "items": {"type": "string"}}}}
       }
     },
     "arm": {
@@ -168,7 +179,7 @@
         "cohort_id": {"type": "string"}, "scenario_ids": {"type": "array", "items": {"type": "integer"}},
         "runtime_status": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeStatus"}]},
         "runtime_provenance": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/runtimeProvenance"}]},
-        "model_participation": {"type": "object", "required": ["turns", "required"], "properties": {"turns": {"type": "integer", "minimum": 0}, "required": {"type": "boolean"}}, "additionalProperties": false},
+        "model_participation": {"type": "object", "required": ["turns", "required"], "properties": {"turns": {"type": "integer", "minimum": 0}, "attempted_turns": {"type": "integer", "minimum": 0}, "generated_turns": {"type": "integer", "minimum": 0}, "accepted_turns": {"type": "integer", "minimum": 0}, "fallback_turns": {"type": "integer", "minimum": 0}, "required": {"type": "boolean"}}, "additionalProperties": false},
         "run_manifest": {"$ref": "#/$defs/runManifest"}, "turn_manifests": {"type": "array", "items": {"$ref": "#/$defs/turnManifest"}},
         "summary": {"type": "object"}, "metrics": {"$ref": "#/$defs/metrics"},
         "scenarios": {"type": "array", "items": {"type": "object", "required": ["scenario_id", "normalized_outcome", "metrics"]}}
@@ -179,7 +190,7 @@
           "then": {"properties": {
             "runtime_status": {"type": "null"},
             "runtime_provenance": {"type": "null"},
-            "model_participation": {"properties": {"turns": {"const": 0}, "required": {"const": false}}},
+            "model_participation": {"properties": {"turns": {"const": 0}, "attempted_turns": {"const": 0}, "generated_turns": {"const": 0}, "accepted_turns": {"const": 0}, "fallback_turns": {"const": 0}, "required": {"const": false}}},
             "fingerprints": {"properties": {"runtime_provenance_sha256": {"type": "null"}}},
             "run_manifest": {"properties": {"record": {"properties": {"adapter": {
               "required": ["layer", "runtime_status", "runtime_provenance"],
@@ -192,7 +203,7 @@
           "then": {"properties": {
             "runtime_status": {"$ref": "#/$defs/runtimeStatus"},
             "runtime_provenance": {"$ref": "#/$defs/runtimeProvenance"},
-            "model_participation": {"properties": {"required": {"const": true}}},
+            "model_participation": {"properties": {"required": {"const": true}, "attempted_turns": {"type": "integer", "minimum": 1}, "generated_turns": {"type": "integer", "minimum": 1}}},
             "run_manifest": {"properties": {"record": {
               "required": ["hardware"],
               "properties": {"hardware": {
@@ -232,6 +243,107 @@
         "adapters": {"$ref": "#/$defs/fourAdapters"}, "scenario_comparison": {"type": "object"}
       },
       "allOf": [{"properties": {"mode": {"const": "controller_only"}, "adapters": {"properties": {"sft": {"properties": {"layer": {"const": "controller_only"}}}, "dpo": {"properties": {"layer": {"const": "controller_only"}}}, "ppo_checkpoint_19": {"properties": {"layer": {"const": "controller_only"}}}, "ppo_adaptive_50": {"properties": {"layer": {"const": "controller_only"}}}}}}}]
+    },
+    "releaseGenerationSettings": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "base_model", "revision", "temperature", "max_new_tokens", "start", "count"],
+      "properties": {
+        "mode": {"const": "model"},
+        "base_model": {"type": "string", "minLength": 1},
+        "revision": {"type": "string", "minLength": 1},
+        "temperature": {"const": 0},
+        "max_new_tokens": {"const": 160},
+        "start": {"const": 0},
+        "count": {"const": 50}
+      }
+    },
+    "releaseCohort": {
+      "type": "object", "additionalProperties": false,
+      "required": ["scenario_ids", "scenario_count", "settings"],
+      "properties": {
+        "scenario_ids": {"type": "array", "items": {"type": "integer"}, "minItems": 50, "maxItems": 50, "uniqueItems": true},
+        "scenario_count": {"const": 50},
+        "settings": {"$ref": "#/$defs/releaseGenerationSettings"}
+      }
+    },
+    "releaseIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["adapter_sha256", "base_model", "base_model_revision", "corpus_sha256", "controller_sha256", "generation_settings"],
+      "properties": {
+        "adapter_sha256": {
+          "type": "object", "additionalProperties": false,
+          "required": ["sft", "dpo", "ppo_checkpoint_19", "ppo_adaptive_50"],
+          "properties": {
+            "sft": {"$ref": "#/$defs/sha256"},
+            "dpo": {"$ref": "#/$defs/sha256"},
+            "ppo_checkpoint_19": {"$ref": "#/$defs/sha256"},
+            "ppo_adaptive_50": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "base_model": {"type": "string", "minLength": 1},
+        "base_model_revision": {"type": "string", "minLength": 1},
+        "corpus_sha256": {"$ref": "#/$defs/sha256"},
+        "controller_sha256": {"$ref": "#/$defs/sha256"},
+        "generation_settings": {"$ref": "#/$defs/releaseGenerationSettings"}
+      }
+    },
+    "releaseArm": {
+      "allOf": [
+        {"$ref": "#/$defs/arm"},
+        {"properties": {"layer": {"const": "integrated"}, "status": {"const": "complete"}}}
+      ],
+      "unevaluatedProperties": false
+    },
+    "releaseArms": {
+      "type": "object", "additionalProperties": false,
+      "required": ["sft", "dpo", "ppo_checkpoint_19", "ppo_adaptive_50"],
+      "properties": {
+        "sft": {"$ref": "#/$defs/releaseArm"},
+        "dpo": {"$ref": "#/$defs/releaseArm"},
+        "ppo_checkpoint_19": {"$ref": "#/$defs/releaseArm"},
+        "ppo_adaptive_50": {"$ref": "#/$defs/releaseArm"}
+      }
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "matrixRelease": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "release_version", "mode", "layer", "cohort_id", "cohort", "generation_settings", "identity", "adapters", "sha256"],
+      "properties": {
+        "schema": {"const": "rlaif.local_app.matrix_release"},
+        "release_version": {"const": 1},
+        "mode": {"const": "integrated"},
+        "layer": {"const": "integrated"},
+        "cohort_id": {"type": "string", "minLength": 1},
+        "cohort": {"$ref": "#/$defs/releaseCohort"},
+        "generation_settings": {"$ref": "#/$defs/releaseGenerationSettings"},
+        "identity": {"$ref": "#/$defs/releaseIdentity"},
+        "adapters": {"$ref": "#/$defs/releaseArms"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "releaseManifest": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema", "release_version", "sha256", "identity"],
+      "properties": {
+        "schema": {"const": "rlaif.local_app.matrix_release"},
+        "release_version": {"const": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "identity": {"$ref": "#/$defs/releaseIdentity"}
+      }
+    },
+    "releaseCheckpoint": {
+      "type": "object", "additionalProperties": false,
+      "required": ["adapter", "arm", "corpus_sha256", "controller_sha256", "base_model", "base_model_revision", "generation_settings", "checkpoint_sha256"],
+      "properties": {
+        "adapter": {"enum": ["sft", "dpo", "ppo_checkpoint_19", "ppo_adaptive_50"]},
+        "arm": {"$ref": "#/$defs/releaseArm"},
+        "corpus_sha256": {"$ref": "#/$defs/sha256"},
+        "controller_sha256": {"$ref": "#/$defs/sha256"},
+        "base_model": {"type": "string", "minLength": 1},
+        "base_model_revision": {"type": "string", "minLength": 1},
+        "generation_settings": {"$ref": "#/$defs/releaseGenerationSettings"},
+        "checkpoint_sha256": {"$ref": "#/$defs/sha256"}
+      }
     }
   }
 }

@@ -32,6 +32,9 @@ class EvaluationLayerContractTests(unittest.TestCase):
                                      "book", (1027,))
         row = run_scenario(scenario, corpus_path=CORPUS)
         row["model_turns"] = 1
+        row["model_attempted_turns"] = 1
+        row["model_generated_turns"] = 1
+        row["model_accepted_turns"] = 0
         row["model_fallbacks"] = 2
         return scenario, row
 
@@ -106,20 +109,22 @@ class EvaluationLayerContractTests(unittest.TestCase):
         self.assertEqual(report["evaluation_layer"]["status"], "incomplete")
         self.assertEqual(report["evaluation_layer"]["model_usage"]["model_turns"], 0)
         self.assertEqual(report["evaluation_layer"]["model_usage"]["fallback_turns"], 1)
-        self.assertIn("model_usage.model_turns", report["evaluation_layer"]["status_reason"])
+        self.assertIn("model_usage.model_generated_turns", report["evaluation_layer"]["status_reason"])
 
     def test_integrated_contract_arbitrary_paths_cannot_bypass_completeness(self):
         contract = evaluation_layer_contract(
             "integrated", cohort_id="cohort", protocol_id="protocol",
             controller_usage={"executed": True},
             model_usage={"loading_permitted": False, "loading_requested": False,
-                         "model_turns": 0},
+                         "model_turns": 0, "model_attempted_turns": 0,
+                         "model_generated_turns": 0, "model_accepted_turns": 0},
             provenance=[{"path": "/arbitrary/evidence", "sha256": "f" * 64}],
             status="complete",
         )
         self.assertEqual(contract["status"], "incomplete")
         for field in ("model_usage.loading_permitted", "model_usage.loading_requested",
-                      "model_usage.model_turns", "adapter.artifact", "adapter.sha256",
+                      "model_usage.model_attempted_turns", "model_usage.model_generated_turns",
+                      "adapter.artifact", "adapter.sha256",
                       "generation_settings.base_model"):
             self.assertIn(field, contract["status_reason"])
 
@@ -131,7 +136,9 @@ class EvaluationLayerContractTests(unittest.TestCase):
             "integrated", cohort_id="cohort", protocol_id="protocol",
             controller_usage={"executed": True},
             model_usage={"loading_permitted": True, "loading_requested": True,
-                         "model_turns": 1, "fallback_turns": 2},
+                         "model_turns": 1, "model_attempted_turns": 3,
+                         "model_generated_turns": 1, "model_accepted_turns": 0,
+                         "fallback_turns": 2},
             provenance=[{"path": "evaluation.py", "sha256": "b" * 64}],
             adapter_artifact=artifact, generation_settings=settings,
             status="complete",
@@ -140,6 +147,24 @@ class EvaluationLayerContractTests(unittest.TestCase):
         self.assertIsNone(contract["status_reason"])
         self.assertEqual(contract["adapter_provenance"], artifact)
         self.assertEqual(contract["generation_settings"], settings)
+
+    def test_rejected_generated_candidate_counts_as_integrated_participation(self):
+        artifact = {"artifact": "stub-adapter", "sha256": "a" * 64}
+        settings = {"mode": "model", "base_model": "Qwen/test", "revision": "rev-1",
+                    "max_new_tokens": 160, "temperature": 0.0}
+        contract = evaluation_layer_contract(
+            "integrated", cohort_id="cohort", protocol_id="protocol",
+            controller_usage={"executed": True},
+            model_usage={"loading_permitted": True, "loading_requested": True,
+                         "model_turns": 1, "model_attempted_turns": 1,
+                         "model_generated_turns": 1, "model_accepted_turns": 0,
+                         "fallback_turns": 1},
+            provenance=[{"path": "evaluation.py", "sha256": "b" * 64}],
+            adapter_artifact=artifact, generation_settings=settings,
+            status="complete",
+        )
+        self.assertEqual(contract["status"], "complete")
+        self.assertEqual(contract["model_usage"]["model_accepted_turns"], 0)
 
     def test_integrated_model_participation_without_adapter_provenance_is_incomplete(self):
         scenario = EvaluationScenario(0, ("Find a flight from IAD to LAS under $100",),

@@ -1,0 +1,35 @@
+{
+  "checks": {
+    "browser": {
+      "path": "artifacts/release/evidence-v1-20261012T005310274515Z/checks/browser.json",
+      "sha256": "c51b6efbf42d763a90dabb6f64c8695d9c3f8ef63314bf32c9d98ef13a99bae4"
+    },
+    "catalog": {
+      "path": "artifacts/release/evidence-v1-20261012T005310274515Z/checks/catalog.json",
+      "sha256": "c3986c25776029bf48b3eaf981c38712afc4c2c46b14ed866da8e0ac21c6c490"
+    },
+    "clean_package": {
+      "path": "artifacts/release/evidence-v1-20261012T005310274515Z/checks/clean_package.json",
+      "sha256": "e4c8479270c2ffabe747e5aa517dbd8d2afb123791785a1cd8c795ab0bc7ab0e"
+    },
+    "local": {
+      "path": "artifacts/release/evidence-v1-20261012T005310274515Z/checks/local.json",
+      "sha256": "6c152ddb514eaf49d4645f66092ed702bf5d14520b244c6a218b5a9a9c33bb8d"
+    },
+    "ops": {
+      "path": "artifacts/release/evidence-v1-20261012T005310274515Z/checks/ops.json",
+      "sha256": "295581cb06bb705a867130594aa23df34fba99fff8b3be4119db048348c8e4ee"
+    },
+    "rebuild": {
+      "path": "artifacts/release/evidence-v1-20261012T005310274515Z/checks/rebuild.json",
+      "sha256": "520be0d594d6f7cdada99f8d20389d838599aebc8d8c43404c8bb637bcd73b88"
+    }
+  },
+  "created_at": "2026-10-12T00:53:10.276491+00:00",
+  "integrated_matrix": {
+    "path": "artifacts/matrix/releases/v1/release-v1.json",
+    "sha256": "ed859fe9f322f1d5f853d653e5ea5b93b06359629b68a00ec6d7256b651706a9"
+  },
+  "schema": "rlaif.local_app.release_evidence",
+  "version": 1
+}

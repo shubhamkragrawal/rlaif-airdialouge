@@ -1,0 +1,220 @@
+{
+  "cohort": {
+    "manifest_hash_status": "reported_in_protocol_readiness; manifest file not present locally",
+    "manifest_sha256": "eae0dda2106cab5b293cc9c2f5096bef796507052c763c1b80bf106e7883089a",
+    "scenario_count": 50,
+    "seed": 20260922
+  },
+  "evaluation_layer": {
+    "cohort_id": "held-out-50-seed20260922",
+    "controller_usage": {
+      "executed": false,
+      "rescue": false
+    },
+    "evidence_level": "reported_summary",
+    "layer": "policy_only",
+    "model_usage": {
+      "results_source": "published_summary",
+      "runtime_invoked": false
+    },
+    "protocol_id": "held-out-policy-protocol-v3",
+    "status": "incomplete",
+    "status_reason": "Aggregate values were imported from the local final-results summary. Per-scenario outputs, resolved evaluation revisions, and verified links between local adapter bytes and evaluated adapters are not present locally."
+  },
+  "evidence_artifacts": [
+    {
+      "artifact": "rebuild/cloud/FINAL_RESULTS.md",
+      "role": "reported_results",
+      "sha256": "874b419da9b5a70a274e997affc7c77d27383c9938edc3983a384256317e2677"
+    },
+    {
+      "artifact": "rebuild/eval_NOTES.md",
+      "role": "evaluation_protocol",
+      "sha256": "3995b0860f65afb63069f116ca70f6ba42da29cd537baa25a9c8a42958c8de74"
+    },
+    {
+      "artifact": "rebuild/cloud/eval_READINESS.md",
+      "role": "historical_cohort_manifest_reference",
+      "sha256": "8ecb7a30f8d6ea8dc4f9e42efdcddadb24ee39e3f2ee33053061d26eb7a42aeb"
+    },
+    {
+      "artifact": "rebuild/cloud/STATUS.md",
+      "role": "run_status_and_output_references",
+      "sha256": "4a98da30af88e580ee958eaf2ad3a30212719f1dd1b0506d8fd5796727ddd3e3"
+    },
+    {
+      "artifact": "rebuild/rlaif/evaluation/eval_qwen.py",
+      "role": "evaluation_implementation",
+      "sha256": "5be5782dc2daf8f2fafaa593e9e047baad45ccb3bc3d3fe135f967ededf3668d"
+    },
+    {
+      "artifact": "rebuild/cloud/eval_sft_full_a100.json",
+      "role": "sft_job_configuration",
+      "sha256": "f9cdc4b6c0e893f1e74a7da0426b674ebe2b648b61efc731c928b9150be0c761"
+    },
+    {
+      "artifact": "rebuild/cloud/eval_dpo_full_a100.json",
+      "role": "dpo_job_configuration",
+      "sha256": "667a6953b9d69b7e30da2774bbd9aea5a683c7d5a0f6feaf3c3b4c61d76199c1"
+    },
+    {
+      "artifact": "rebuild/cloud/eval_ppo_full_a100.json",
+      "role": "ppo_checkpoint_19_job_configuration",
+      "sha256": "1c10ed209d52314fef4d8cf118f744dbffad47603b823e7b01666a0c141de1cd"
+    },
+    {
+      "artifact": "rebuild/cloud/eval_ppo_adaptive_full_a100.json",
+      "role": "ppo_adaptive_50_job_configuration",
+      "sha256": "af943cd0b0ceb8c88bd750fe5eda641e5adc234a42d7b918496d4e34d31fb2a3"
+    }
+  ],
+  "limitations": [
+    "Only published aggregate values are imported; no per-scenario records are claimed.",
+    "Local adapter files are not asserted to be byte-identical to the evaluated artifacts.",
+    "Per-arm resolved model revisions and raw evaluation manifests are unavailable locally.",
+    "Judge-score sample counts and booking-success denominators are absent from the summary table.",
+    "Protocol notes contain stale pre-evaluation status text and are used only as hash-pinned protocol context."
+  ],
+  "provenance": {
+    "gcp_accessed": false,
+    "network_accessed": false,
+    "protocol_source": "rebuild/eval_NOTES.md",
+    "protocol_source_sha256": "3995b0860f65afb63069f116ca70f6ba42da29cd537baa25a9c8a42958c8de74"
+  },
+  "report_version": 1,
+  "results_imported": true,
+  "scenario_records_imported": false,
+  "scenarios": [],
+  "summary": {
+    "adapters": {
+      "dpo": {
+        "adapter_identity_verified": false,
+        "booking_success": {
+          "basis": "reported_summary",
+          "denominator": null,
+          "rate": 0.0
+        },
+        "evaluated_adapter_sha256": null,
+        "evidence_level": "reported_summary",
+        "judge_score": {
+          "basis": "reported_mean",
+          "scored_scenarios": null,
+          "value": 2.58
+        },
+        "scenario_records_available": false,
+        "task_completion": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.34,
+          "successes": 17,
+          "wilson_95": [
+            0.224,
+            0.478
+          ]
+        },
+        "unknown_flight_id_hallucination_rate": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.0
+        }
+      },
+      "ppo_adaptive_50": {
+        "adapter_identity_verified": false,
+        "booking_success": {
+          "basis": "reported_summary",
+          "denominator": null,
+          "rate": null
+        },
+        "evaluated_adapter_sha256": null,
+        "evidence_level": "reported_summary",
+        "judge_score": {
+          "basis": "reported_mean",
+          "scored_scenarios": null,
+          "value": 2.46
+        },
+        "scenario_records_available": false,
+        "task_completion": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.34,
+          "successes": 17,
+          "wilson_95": [
+            0.224,
+            0.478
+          ]
+        },
+        "unknown_flight_id_hallucination_rate": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.0
+        }
+      },
+      "ppo_checkpoint_19": {
+        "adapter_identity_verified": false,
+        "booking_success": {
+          "basis": "reported_summary",
+          "denominator": null,
+          "rate": null
+        },
+        "evaluated_adapter_sha256": null,
+        "evidence_level": "reported_summary",
+        "judge_score": {
+          "basis": "reported_mean",
+          "scored_scenarios": null,
+          "value": 1.92
+        },
+        "scenario_records_available": false,
+        "task_completion": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.38,
+          "successes": 19,
+          "wilson_95": [
+            0.259,
+            0.518
+          ]
+        },
+        "unknown_flight_id_hallucination_rate": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.0
+        }
+      },
+      "sft": {
+        "adapter_identity_verified": false,
+        "booking_success": {
+          "basis": "reported_summary",
+          "denominator": null,
+          "rate": 0.0
+        },
+        "evaluated_adapter_sha256": null,
+        "evidence_level": "reported_summary",
+        "judge_score": {
+          "basis": "reported_mean",
+          "scored_scenarios": null,
+          "value": 2.54
+        },
+        "scenario_records_available": false,
+        "task_completion": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.26,
+          "successes": 13,
+          "wilson_95": [
+            0.159,
+            0.396
+          ]
+        },
+        "unknown_flight_id_hallucination_rate": {
+          "basis": "reported_summary",
+          "observed": 50,
+          "rate": 0.0
+        }
+      }
+    },
+    "evidence_level": "reported_summary",
+    "scenario_count": 50,
+    "source_artifact": "rebuild/cloud/FINAL_RESULTS.md",
+    "source_sha256": "874b419da9b5a70a274e997affc7c77d27383c9938edc3983a384256317e2677"
+  }
+}

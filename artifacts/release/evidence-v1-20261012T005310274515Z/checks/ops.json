@@ -1,0 +1,15 @@
+{
+  "check": "ops",
+  "command": "project-python -m unittest local_app.tests.test_operations local_app.tests.test_operations_contract",
+  "duration_ms": 94,
+  "exit_code": 0,
+  "schema": "rlaif.local_app.release_check",
+  "started_at": "2026-10-12T00:53:10.180354+00:00",
+  "status": "passed",
+  "stderr_bytes": 255,
+  "stderr_sha256": "cb293b63b501ee4f97c5f7499a17965e22cede8c4b7f87db22952dee673a7352",
+  "stdout_bytes": 51,
+  "stdout_sha256": "6dd39b1bf3eb48948593b7de686b6423a9b1e5fcf12a51d7fc0525056a550a27",
+  "version": 1,
+  "working_directory": "."
+}

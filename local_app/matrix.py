@@ -25,6 +25,7 @@ from .guardrails import detect_transaction_claim
 from .observability import (RunRecord, TurnRecord, canonical_json, record_json,
                             record_sha256)
 from .outcomes import Intent, OUTCOME_SCHEMA, OUTCOME_SCHEMA_VERSION
+from .output_validation import validate_output
 
 MATRIX_REPORT_VERSION = 1
 BASELINE_SCHEMA = "rlaif.local_app.matrix_baseline"
@@ -122,14 +123,23 @@ def _turn_evidence(observed: Sequence[Mapping[str, Any]], scenarios: Sequence[An
         transaction_claim = detect_transaction_claim(response)
         unsupported_claim = transaction_claim and authoritative_transaction_evidence is None
         fallback_reason = result.get("fallback_reason") or result.get("validation_reason")
+        model_fallback_reason = result.get("model_fallback_reason")
+        model_attempted = bool(result.get("model_attempted"))
+        model_generated = bool(result.get("model_generated", result.get("model_used")))
+        model_accepted = bool(result.get("model_accepted", result.get("model_used")))
+        model_fallback = bool(result.get("model_fallback", model_attempted and not model_accepted))
+        validation_reason = result.get("final_validation_reason")
+        if "final_validation_reason" not in result and outcome is not None:
+            final_errors = validate_output(response, outcome)
+            validation_reason = final_errors[0].code if final_errors else None
         malformed = bool(re.search(r"^\s*(?:\{|\[|None\b|\(\))", response)) or (
-            isinstance(fallback_reason, str) and "malformed" in fallback_reason.casefold())
+            isinstance(validation_reason, str) and "malformed" in validation_reason.casefold())
         expected_no_results = scenario.expected_status == "no_flight" if is_search else None
         presented_no_results = bool(re.search(r"\bno (?:matching )?flights?\b|couldn't find a matching flight", response, re.I))
         normalized_entities = sorted(claimed_entities)
         grounded = sorted(grounded_entities)
         tokens = result.get("usage") if isinstance(result.get("usage"), Mapping) else {}
-        fallback = bool(fallback_reason)
+        fallback = model_fallback or bool(fallback_reason)
         latency = float(captured["latency_ms"])
         evidence = {
             "scenario_id": sid,
@@ -144,14 +154,14 @@ def _turn_evidence(observed: Sequence[Mapping[str, Any]], scenarios: Sequence[An
             "expected_no_results": expected_no_results,
             "presented_no_results": presented_no_results if is_search else None,
             "malformed_output": malformed, "response": response,
-            "validation_result": "failed" if fallback_reason else "valid",
-            "validation_reason": fallback_reason,
-            "repetitive_output": (result.get("repetitive_output")
-                                  if isinstance(result.get("repetitive_output"), bool)
-                                  else (True if isinstance(fallback_reason, str)
-                                        and re.search(r"repeated|duplicate|closing_loop",
-                                                      fallback_reason, re.I)
-                                        else False)),
+            "validation_result": "failed" if validation_reason else "valid",
+            "validation_reason": validation_reason,
+            "model_attempted": model_attempted,
+            "model_generated": model_generated,
+            "model_accepted": model_accepted,
+            "model_fallback": model_fallback,
+            "model_fallback_reason": model_fallback_reason,
+            "repetitive_output": validation_reason == "repeated_sentence",
             "fallback": fallback, "fallback_reason": fallback_reason,
             "input_tokens": tokens.get("input_tokens"),
             "output_tokens": tokens.get("output_tokens"),
@@ -160,6 +170,10 @@ def _turn_evidence(observed: Sequence[Mapping[str, Any]], scenarios: Sequence[An
             "peak_memory_mb": scenario_rows[sid].get("peak_process_rss_mb"),
         }
         safe_result = {"model_used": bool(result.get("model_used")),
+                       "model_attempted": model_attempted,
+                       "model_generated": model_generated,
+                       "model_accepted": model_accepted,
+                       "model_fallback": model_fallback,
                        "result_count": len(results), "simulated": result.get("simulated") is True}
         record = TurnRecord(
             run_id=run_id, scenario_id=str(sid), controller_version=controller_version,
@@ -169,8 +183,9 @@ def _turn_evidence(observed: Sequence[Mapping[str, Any]], scenarios: Sequence[An
                 (str(authoritative_transaction_evidence["hold_id"]),
                  str(authoritative_transaction_evidence["booking_id"]))
                 if authoritative_transaction_evidence is not None else ()),
-            validation_result=("failed" if fallback_reason else "valid"),
-            fallback_reason=str(fallback_reason) if fallback_reason else None,
+            validation_result=("failed" if validation_reason else "valid"),
+            fallback_reason=(str(model_fallback_reason or fallback_reason)
+                             if model_fallback_reason or fallback_reason else None),
             input_tokens=tokens.get("input_tokens"), output_tokens=tokens.get("output_tokens"),
             latency_ms=latency,
             peak_memory_bytes=(int(float(evidence["peak_memory_mb"]) * 1024 * 1024)
@@ -379,7 +394,16 @@ def run_matrix(
             if mode == "integrated":
                 runtime_status, runtime_provenance = _runtime_snapshot(
                     runtime_manager, adapter, settings, artifact.get("sha256"))
-            participation = sum(bool(item["result"].get("model_used")) for item in observed)
+            model_attempted_turns = sum(bool(item["result"].get("model_attempted"))
+                                        for item in observed)
+            model_generated_turns = sum(bool(item["result"].get(
+                "model_generated", item["result"].get("model_used"))) for item in observed)
+            model_accepted_turns = sum(bool(item["result"].get(
+                "model_accepted", item["result"].get("model_used"))) for item in observed)
+            model_fallback_turns = sum(bool(item["result"].get(
+                "model_fallback", item["result"].get("model_attempted")
+                and not item["result"].get("model_used"))) for item in observed)
+            participation = model_generated_turns
             adapter_metadata = ({"mode": "deterministic_controller"}
                                 if mode == "controller_only" else {
                                     "artifact_sha256": artifact.get("sha256"),
@@ -402,6 +426,19 @@ def run_matrix(
                 "detected_turns": repeated_turns, "observed_turns": len(turn_rows),
                 "rate": repeated_turns / len(turn_rows) if turn_rows else None,
                 "basis": "duplicate_response_or_validator_repetition_reason",
+            }
+            model_fallback_reasons = sorted({
+                str(item["result"]["model_fallback_reason"])
+                for item in observed if item["result"].get("model_fallback_reason")
+            })
+            metrics["model_inference"] = {
+                "attempted_turns": model_attempted_turns,
+                "generated_turns": model_generated_turns,
+                "accepted_turns": model_accepted_turns,
+                "fallback_turns": model_fallback_turns,
+                "acceptance_rate": (model_accepted_turns / model_generated_turns
+                                    if model_generated_turns else None),
+                "fallback_reasons": model_fallback_reasons,
             }
             status, reason = contract["status"], contract["status_reason"]
             if mode == "integrated":
@@ -449,6 +486,10 @@ def run_matrix(
                 "runtime_status": runtime_status,
                 "runtime_provenance": runtime_provenance,
                 "model_participation": {"turns": participation,
+                                        "attempted_turns": model_attempted_turns,
+                                        "generated_turns": model_generated_turns,
+                                        "accepted_turns": model_accepted_turns,
+                                        "fallback_turns": model_fallback_turns,
                                         "required": mode == "integrated"},
                 "run_manifest": run_manifest, "turn_manifests": turn_manifests,
                 "summary": report["summary"], "metrics": metrics,
@@ -628,7 +669,7 @@ def run_release(*, runtime_manager: Any, corpus_path: str | Path = DEFAULT_CORPU
                     or cached_arm.get("scenario_ids") != expected_scenario_ids
                     or (cached_arm.get("metrics") or {}).get("scenario_count") != count
                     or not isinstance(participation, Mapping)
-                    or participation.get("turns", 0) <= 0):
+                    or participation.get("generated_turns", participation.get("turns", 0)) <= 0):
                 raise ValueError(f"release checkpoint identity mismatch for {adapter}")
             arms[adapter] = arm["arm"]
             continue
@@ -640,7 +681,9 @@ def run_release(*, runtime_manager: Any, corpus_path: str | Path = DEFAULT_CORPU
         provenance = arm.get("runtime_provenance") or {}
         if arm.get("layer") != "integrated" or arm.get("status") != "complete":
             raise ValueError(f"adapter {adapter} did not pass integrated release gates")
-        if (not provenance.get("complete") or arm.get("model_participation", {}).get("turns", 0) <= 0
+        participation = arm.get("model_participation") or {}
+        if (not provenance.get("complete")
+                or participation.get("generated_turns", participation.get("turns", 0)) <= 0
                 or provenance.get("base_model") != base_model
                 or provenance.get("base_model_revision") != base_revision
                 or arm.get("scenario_ids") != expected_scenario_ids

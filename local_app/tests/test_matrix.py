@@ -216,6 +216,34 @@ class MatrixTests(unittest.TestCase):
                 self.assertEqual(arm["fingerprints"]["runtime_provenance_sha256"],
                                  arm["runtime_provenance"]["sha256"])
 
+    def test_rejected_candidate_counts_as_participation_but_scores_safe_fallback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            paths = {}
+            for adapter in ADAPTERS:
+                path = Path(directory) / adapter
+                path.mkdir()
+                (path / "adapter_config.json").write_text('{"peft_type":"LORA"}')
+                paths[adapter] = path
+            manager = _StubRuntimeManager(paths)
+            with patch.object(_StubModel, "generate",
+                              return_value="Flight 1027. Flight 1027."):
+                report = run_matrix(mode="integrated", corpus_path=CORPUS,
+                                    scenarios=SCENARIOS, runtime_manager=manager,
+                                    adapters=("sft",))
+
+        arm = report["adapters"]["sft"]
+        self.assertEqual(arm["status"], "complete")
+        self.assertEqual(arm["model_participation"], {
+            "turns": 1, "attempted_turns": 1, "generated_turns": 1,
+            "accepted_turns": 0, "fallback_turns": 1, "required": True,
+        })
+        self.assertEqual(arm["metrics"]["model_inference"]["acceptance_rate"], 0.0)
+        evidence = arm["turn_manifests"][0]["evidence"]
+        self.assertEqual(evidence["model_fallback_reason"], "repeated_sentence")
+        self.assertEqual(evidence["validation_result"], "valid")
+        self.assertFalse(evidence["repetitive_output"])
+        self.assertNotIn("Flight 1027. Flight 1027.", evidence["response"])
+
     def test_release_checkpoints_resume_and_assemble_in_temporary_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             paths = {}
@@ -372,6 +400,7 @@ class MatrixTests(unittest.TestCase):
         self.assertEqual(len(definitions["arm"]["allOf"]), 2)
         self.assertIn("integrated", str(definitions["arm"]["allOf"][1]))
         self.assertIn("controller_only", str(definitions["arm"]["allOf"][0]))
+        self.assertIn("model_inference", definitions["metrics"]["properties"])
 
     def test_integrated_missing_participation_and_provenance_is_incomplete(self):
         with tempfile.TemporaryDirectory() as directory:

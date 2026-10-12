@@ -1,0 +1,15 @@
+{
+  "check": "rebuild",
+  "command": "project-python -m unittest discover -s rlaif/tests -t . (working directory: rebuild)",
+  "duration_ms": 3885,
+  "exit_code": 0,
+  "schema": "rlaif.local_app.release_check",
+  "started_at": "2026-10-12T00:53:03.028582+00:00",
+  "status": "passed",
+  "stderr_bytes": 431,
+  "stderr_sha256": "0be772ad4a1d955c2f7211070c135b9e5b67a237fb481dc0d04837e8932ed700",
+  "stdout_bytes": 201,
+  "stdout_sha256": "12baa5acfd34dfcf7b12eeeb2f0db1e6a80b87cda608ca8c569286b070da6321",
+  "version": 1,
+  "working_directory": "rebuild"
+}

@@ -39,7 +39,7 @@ REQUIRED_METRIC_FIELDS = (
     "no_results_presentation_accuracy", "malformed_output_rate",
     "repetition_rate", "repetition_evidence", "validation", "fallback_rate",
     "fallback_reason_distribution", "turns", "tokens", "latency_ms",
-    "peak_memory_mb", "judge_score",
+    "peak_memory_mb", "judge_score", "model_inference",
 )
 PROTECTED_STAGING = re.compile(
     r"(^|/)(?:\.env(?:\.[^/]+)?|secrets?)(?:/|$)|"
@@ -77,6 +77,27 @@ def _finite_rate(value: Any, label: str) -> float:
     if not math.isfinite(number) or not 0 <= number <= 1:
         raise ValueError(f"{label} must be in [0, 1]")
     return number
+
+
+def _hardware_matches_provenance(record: Mapping[str, Any], provenance: Mapping[str, Any],
+                                 summary: Any) -> bool:
+    hardware = record.get("hardware")
+    if not isinstance(hardware, Mapping):
+        return False
+    for field in ("device", "precision"):
+        expected = provenance.get(field)
+        if not isinstance(expected, str) or not expected or hardware.get(field) != expected:
+            return False
+    peak = provenance.get("peak_memory_bytes")
+    observed_peak = hardware.get("peak_memory_bytes")
+    if not (isinstance(peak, int) and not isinstance(peak, bool) and peak >= 0
+            and isinstance(observed_peak, int) and not isinstance(observed_peak, bool)
+            and observed_peak == peak):
+        return False
+    if "peak_process_rss_mb" in hardware:
+        return (isinstance(summary, Mapping)
+                and hardware["peak_process_rss_mb"] == summary.get("peak_process_rss_mb"))
+    return True
 
 
 def _verify_ref(root: Path, ref: Mapping[str, Any], label: str) -> tuple[Path, str]:
@@ -153,6 +174,7 @@ def _verify_matrix(path: Path) -> dict[str, Any]:
                 or not prov.get("base_model_revision") or not prov.get("generation_settings")
                 or not prov.get("device") or not prov.get("precision")
                 or not isinstance(prov.get("peak_memory_bytes"), int)
+                or isinstance(prov.get("peak_memory_bytes"), bool)
                 or prov.get("peak_memory_bytes", -1) < 0):
             raise ValueError(f"{name}: runtime provenance is incomplete or mismatched")
         provenance_payload = {key: value for key, value in prov.items() if key != "sha256"}
@@ -172,7 +194,17 @@ def _verify_matrix(path: Path) -> dict[str, Any]:
         if status.get("lifecycle_status") != "ready" or status.get("mode") != "local_model" or status.get("available") is not True:
             raise ValueError(f"{name}: runtime status is not ready local_model")
         participation = arm.get("model_participation") or {}
-        if participation.get("required") is not True or participation.get("turns", 0) <= 0:
+        attempted = participation.get("attempted_turns", 0)
+        generated = participation.get("generated_turns", participation.get("turns", 0))
+        accepted = participation.get("accepted_turns", 0)
+        fallback_count = participation.get("fallback_turns", 0)
+        counts = (attempted, generated, accepted, fallback_count)
+        if (participation.get("required") is not True
+                or any(not isinstance(value, int) or isinstance(value, bool) or value < 0
+                       for value in counts)
+                or attempted <= 0 or generated <= 0 or generated > attempted
+                or accepted > generated or fallback_count > attempted
+                or participation.get("turns") != generated):
             raise ValueError(f"{name}: no real model participation")
         if not isinstance(arm.get("run_manifest"), dict) or not arm["run_manifest"].get("sha256"):
             raise ValueError(f"{name}: missing run manifest")
@@ -180,10 +212,19 @@ def _verify_matrix(path: Path) -> dict[str, Any]:
         run_record = run_manifest.get("record")
         if not isinstance(run_record, dict) or _canonical_sha256(run_record) != run_manifest["sha256"]:
             raise ValueError(f"{name}: run manifest hash does not match its record")
+        if not _hardware_matches_provenance(run_record, prov, arm.get("summary")):
+            raise ValueError(f"{name}: run manifest hardware does not match runtime provenance")
         turns = arm.get("turn_manifests")
         if not isinstance(turns, list) or not turns or any(not item.get("sha256") for item in turns):
             raise ValueError(f"{name}: missing turn manifest hashes")
+        scenario_turn_counts = {scenario_id: 0 for scenario_id in ids}
+        observed_model_counts = {"attempted_turns": 0, "generated_turns": 0,
+                                 "accepted_turns": 0, "fallback_turns": 0}
+        observed_token_totals = {"input": 0, "output": 0}
+        observed_token_values = {"input": False, "output": False}
         for turn in turns:
+            if not isinstance(turn, Mapping) or not isinstance(turn.get("record"), Mapping):
+                raise ValueError(f"{name}: malformed turn manifest")
             record_hash = _canonical_sha256(turn.get("record"))
             hashed = _canonical_sha256({"record": turn.get("record"), "evidence": turn.get("evidence")})
             if (hashed != turn["sha256"] or record_hash != turn.get("record_sha256")):
@@ -195,6 +236,32 @@ def _verify_matrix(path: Path) -> dict[str, Any]:
                     or evidence.get("repetitive_output") is not False
                     or evidence.get("validation_result") != "valid"):
                 raise ValueError(f"{name}: unsafe or invalid per-turn evidence")
+            try:
+                scenario_id = int(turn["record"].get("scenario_id"))
+            except (TypeError, ValueError):
+                raise ValueError(f"{name}: turn manifest has an invalid scenario ID") from None
+            if (scenario_id not in scenario_turn_counts
+                    or evidence.get("scenario_id") != scenario_id):
+                raise ValueError(f"{name}: turn manifest scenario ID is outside the cohort or mismatched")
+            scenario_turn_counts[scenario_id] += 1
+            for count_name, evidence_name in (
+                    ("attempted_turns", "model_attempted"),
+                    ("generated_turns", "model_generated"),
+                    ("accepted_turns", "model_accepted"),
+                    ("fallback_turns", "model_fallback")):
+                value = evidence.get(evidence_name)
+                if not isinstance(value, bool):
+                    raise ValueError(f"{name}: missing per-turn {evidence_name} evidence")
+                observed_model_counts[count_name] += int(value)
+            for token_name, evidence_name in (("input", "input_tokens"),
+                                               ("output", "output_tokens")):
+                value = evidence.get(evidence_name)
+                if value is not None:
+                    if (isinstance(value, bool) or not isinstance(value, (int, float))
+                            or not math.isfinite(value) or value < 0):
+                        raise ValueError(f"{name}: invalid per-turn {evidence_name} evidence")
+                    observed_token_totals[token_name] += value
+                    observed_token_values[token_name] = True
             if evidence.get("transaction_claim") is True:
                 transaction = evidence.get("authoritative_transaction_evidence")
                 if (not isinstance(transaction, Mapping) or transaction.get("current_turn") is not True
@@ -213,6 +280,33 @@ def _verify_matrix(path: Path) -> dict[str, Any]:
         rows = arm.get("scenarios")
         if not isinstance(rows, list) or [row.get("scenario_id") for row in rows] != ids:
             raise ValueError(f"{name}: incomplete scenario results")
+        for row in rows:
+            expected_turns = row.get("metrics", {}).get("turn_count")
+            scenario_id = row["scenario_id"]
+            if (isinstance(expected_turns, bool) or not isinstance(expected_turns, int)
+                    or expected_turns < 0 or scenario_turn_counts[scenario_id] != expected_turns):
+                raise ValueError(f"{name}: retained turn manifests do not cover scenario {scenario_id}")
+            scenario_metrics = row.get("metrics")
+            normalized = row.get("normalized_outcome")
+            success = scenario_metrics.get("task_success") if isinstance(scenario_metrics, Mapping) else None
+            if (not isinstance(success, bool) or not isinstance(normalized, Mapping)
+                    or normalized.get("task_success") is not success):
+                raise ValueError(f"{name}: scenario task_success disagrees with normalized outcome")
+        task_completion_metrics = arm.get("metrics") or {}
+        completion = (task_completion_metrics.get("task_completion")
+                      if isinstance(task_completion_metrics, Mapping) else None)
+        successes = sum(row["metrics"]["task_success"] is True for row in rows)
+        if (not isinstance(completion, Mapping)
+                or isinstance(completion.get("successes"), bool)
+                or not isinstance(completion.get("successes"), int)
+                or completion.get("successes") != successes
+                or completion.get("rate") != successes / len(ids)
+                or task_completion_metrics.get("scenario_count") != len(ids)):
+            raise ValueError(f"{name}: task completion aggregate does not match scenario outcomes")
+        if observed_model_counts != {key: participation_value for key, participation_value in (
+                ("attempted_turns", attempted), ("generated_turns", generated),
+                ("accepted_turns", accepted), ("fallback_turns", fallback_count))}:
+            raise ValueError(f"{name}: model inference totals do not match retained turn evidence")
         metrics = arm.get("metrics") or {}
         if metrics.get("scenario_count") != len(ids):
             raise ValueError(f"{name}: metric scenario count mismatch")
@@ -237,6 +331,20 @@ def _verify_matrix(path: Path) -> dict[str, Any]:
                 raise ValueError(f"{name}: {field} must equal release target {target}")
         if not isinstance(metrics["fallback_reason_distribution"], Mapping):
             raise ValueError(f"{name}: fallback_reason_distribution must be an object")
+        inference = metrics["model_inference"]
+        if (not isinstance(inference, Mapping)
+                or inference.get("attempted_turns") != attempted
+                or inference.get("generated_turns") != generated
+                or inference.get("accepted_turns") != accepted
+                or inference.get("fallback_turns") != fallback_count
+                or not isinstance(inference.get("fallback_reasons"), list)):
+            raise ValueError(f"{name}: model inference telemetry is missing or inconsistent")
+        token_metrics = metrics["tokens"]
+        for token_name in ("input", "output"):
+            retained_total = (observed_token_totals[token_name]
+                              if observed_token_values[token_name] else None)
+            if token_metrics.get(token_name) != retained_total:
+                raise ValueError(f"{name}: {token_name} token total does not match retained turn usage")
         for field in ("turns", "tokens", "latency_ms", "judge_score"):
             if not isinstance(metrics[field], Mapping):
                 raise ValueError(f"{name}: {field} must be an object")

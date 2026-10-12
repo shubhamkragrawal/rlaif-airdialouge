@@ -1,0 +1,15 @@
+{
+  "check": "local",
+  "command": "project-python -m unittest discover -s local_app/tests -t .",
+  "duration_ms": 21947,
+  "exit_code": 0,
+  "schema": "rlaif.local_app.release_check",
+  "started_at": "2026-10-12T00:52:41.080985+00:00",
+  "status": "passed",
+  "stderr_bytes": 988,
+  "stderr_sha256": "ba6b68abbf7be1dfd63240359e7360d03f5f18921a381cee5be19efb9158a4dc",
+  "stdout_bytes": 827,
+  "stdout_sha256": "03e4cfc40d6ec5de7a1022481bf2d4bf73ccf6ca9fcf4ed7e25e46edef5dd4bf",
+  "version": 1,
+  "working_directory": "."
+}

@@ -35,6 +35,10 @@ class RuntimeIntegrationTests(unittest.TestCase):
         result = controller.handle(session, "Find a flight from IAD to LAS under $100")
 
         self.assertTrue(result["model_used"])
+        self.assertTrue(result["model_attempted"])
+        self.assertTrue(result["model_generated"])
+        self.assertTrue(result["model_accepted"])
+        self.assertFalse(result["model_fallback"])
         self.assertEqual(result["text"], adapter.response)
         self.assertEqual(len(adapter.calls), 1)
         messages, flights = adapter.calls[0]
@@ -51,6 +55,13 @@ class RuntimeIntegrationTests(unittest.TestCase):
         )
 
         self.assertFalse(result["model_used"])
+        self.assertTrue(result["model_attempted"])
+        self.assertTrue(result["model_generated"])
+        self.assertFalse(result["model_accepted"])
+        self.assertTrue(result["model_fallback"])
+        self.assertEqual(result["model_fallback_reason"], "unsupported_flight_id")
+        self.assertEqual(result["validation_reason"], "unsupported_flight_id")
+        self.assertIsNone(result["final_validation_reason"])
         self.assertIn("1027", result["text"])
         self.assertNotIn("9999", result["text"])
 
@@ -63,6 +74,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
         )
 
         self.assertFalse(result["model_used"])
+        self.assertTrue(result["model_generated"])
+        self.assertEqual(result["model_fallback_reason"], "unsupported_price")
         self.assertNotIn("$99", result["text"])
 
     def test_model_cannot_deny_non_empty_search_results(self):
@@ -74,6 +87,8 @@ class RuntimeIntegrationTests(unittest.TestCase):
         )
 
         self.assertFalse(result["model_used"])
+        self.assertTrue(result["model_generated"])
+        self.assertTrue(result["model_fallback"])
         self.assertIn("1027", result["text"])
 
     def test_model_failure_falls_back_without_breaking_the_session(self):
@@ -86,6 +101,9 @@ class RuntimeIntegrationTests(unittest.TestCase):
         )
 
         self.assertFalse(result["model_used"])
+        self.assertTrue(result["model_attempted"])
+        self.assertFalse(result["model_generated"])
+        self.assertTrue(result["model_fallback"])
         self.assertIn("I found these simulated flights", result["text"])
 
     def test_unconfigured_adapter_keeps_deterministic_baseline(self):

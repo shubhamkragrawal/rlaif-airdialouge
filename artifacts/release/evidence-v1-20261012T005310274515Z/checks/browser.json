@@ -1,0 +1,15 @@
+{
+  "check": "browser",
+  "command": "project-python -m unittest local_app.tests.test_browser_regressions",
+  "duration_ms": 372,
+  "exit_code": 0,
+  "schema": "rlaif.local_app.release_check",
+  "started_at": "2026-10-12T00:53:06.913439+00:00",
+  "status": "passed",
+  "stderr_bytes": 107,
+  "stderr_sha256": "d4abf49d388cbab99d78525181725f1acc236509132ff640b982fda6677c212a",
+  "stdout_bytes": 0,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "version": 1,
+  "working_directory": "."
+}

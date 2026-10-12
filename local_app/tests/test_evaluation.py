@@ -69,6 +69,11 @@ class EvaluationTests(unittest.TestCase):
                            model_loader=lambda _name: UnsupportedClaimAdapter())
         self.assertEqual(row["rejections"], 1)
         self.assertIn("unsupported_transaction_claim", row["fallback_reasons"])
+        self.assertEqual(row["model_attempted_turns"], 1)
+        self.assertEqual(row["model_generated_turns"], 1)
+        self.assertEqual(row["model_accepted_turns"], 0)
+        self.assertEqual(row["model_fallbacks"], 1)
+        self.assertEqual(row["model_turns"], 1)
 
     def test_evaluation_records_estimated_tokens_when_adapter_omits_usage(self):
         class UnreportedUsageAdapter:

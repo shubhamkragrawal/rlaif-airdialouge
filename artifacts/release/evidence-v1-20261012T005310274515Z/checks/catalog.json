@@ -1,0 +1,15 @@
+{
+  "check": "catalog",
+  "command": "project-python -m unittest local_app.tests.test_regression_catalog local_app.tests.test_regression_catalog_scenarios",
+  "duration_ms": 217,
+  "exit_code": 0,
+  "schema": "rlaif.local_app.release_check",
+  "started_at": "2026-10-12T00:53:07.285168+00:00",
+  "status": "passed",
+  "stderr_bytes": 112,
+  "stderr_sha256": "7497242b403f168e0d0d13a74904fc24152b285a04a3b607e662d9828b2dd6d7",
+  "stdout_bytes": 0,
+  "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "version": 1,
+  "working_directory": "."
+}

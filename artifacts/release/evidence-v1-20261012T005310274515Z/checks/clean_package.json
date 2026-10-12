@@ -1,0 +1,23 @@
+{
+  "check": "clean_package",
+  "command": "build wheel and sdist; fresh temporary venv; offline install; isolated import, localhost health, and one-scenario evaluation",
+  "duration_ms": 2678,
+  "exit_code": 0,
+  "schema": "rlaif.local_app.release_check",
+  "started_at": "2026-10-12T00:53:07.502335+00:00",
+  "status": "passed",
+  "stderr_bytes": 103,
+  "stderr_sha256": "fb3ef0e3eb6c2ffe415edb27493e2597d2956c14278463b9061a732cbe5b1e4b",
+  "stdout_bytes": 11073,
+  "stdout_sha256": "6f68ff7270423b3538d551e28094798bc0d833d17ad4d368bf121cc751c57646",
+  "subchecks": {
+    "build_wheel_and_sdist": "passed",
+    "fresh_venv": "passed",
+    "isolated_imports": "passed",
+    "localhost_health": "passed",
+    "minimal_evaluation": "passed",
+    "offline_install": "passed"
+  },
+  "version": 1,
+  "working_directory": "."
+}
